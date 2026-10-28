@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+*.har
+*.db
+*.db-*
+data/
+profiles/
+.state/
+cookies*

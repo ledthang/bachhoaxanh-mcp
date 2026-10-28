@@ -1,0 +1,10 @@
+{
+  "name": "bhx-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Phase 0 BHX authenticated integration research; not a functional MCP server yet",
+  "engines": { "node": ">=22" },
+  "scripts": { "login": "node scripts/login.mjs" },
+  "dependencies": { "playwright": "1.64.1" }
+}
