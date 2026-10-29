@@ -5,6 +5,6 @@
   "type": "module",
   "description": "Phase 0 BHX authenticated integration research; not a functional MCP server yet",
   "engines": { "node": ">=22" },
-  "scripts": { "login": "node scripts/login.mjs" },
+  "scripts": { "start": "node src/server.mjs", "test": "node scripts/mcp.test.mjs", "login": "node scripts/login.mjs" },
   "dependencies": { "playwright": "1.64.1" }
 }
