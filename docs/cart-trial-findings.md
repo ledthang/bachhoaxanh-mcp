@@ -17,6 +17,15 @@ A bounded, separately approved trial targeted product 335195, quantity 1, initia
 - A fresh website-generated Add interception observed `productId: 335195`, `quantity: 1`, `productType: 1`, `scenario: 0`, and empty `listPromotion`. Request was aborted, not forwarded. Authenticated context, empty-cart guard and main product UI price passed in that run.
 - These values agree on the observed box-buy type/scenario; no mismatch was found there. This does not establish promotion eligibility or explain the previous cart response. Do not invent promotion IDs or add unobserved request fields to force the catalog price.
 
+## Purchase prerequisite investigation
+
+- The original request guard blocked website `GET /gw/Product/GetPopupProduct`. Public source catches popup request failure and can schedule ordinary Add. Therefore the old preflight pass did not establish an intact promotion flow; current shipped preflight fails closed on this blocked prerequisite.
+- A private diagnostic allowed only the observed popup GET with the target product and matching province/ward/store context, while continuing to abort every Add. HTTP 200 returned `isShowPopup: true`, `popupType: 2`, one product unit, price 5,000 and `isBuyTogether: true`.
+- Runtime debugger inspection confirmed the hook receives one unit with `isBuyTogether: true` and `isShowPopup: true`. The loaded popup component had `open: true`, then changed quantity from 0 to 1 and generated ordinary Add itself. Thus an Add with empty promotions is not, by itself, evidence of fallback.
+- `popupType: 2` means **Normal** in the popup enum; a separate promotion enum uses the same number for ComboDetail. Do not mix these enums.
+- The visible popup was found via `.list-choose-combo`, showing 5,000 / 6,900 / -28%. `[role="dialog"]` returned no matches and is not a reliable absence test for this site.
+- Allowing the popup read did not establish cart price: all diagnostic Add requests were aborted. The previous 6,900 cart response still has no proven pricing cause. Buy-together eligibility, attachment handling and customer-specific conditions remain open.
+
 ## Limits
 
 No quantity-2 update, full restart-persistence cycle with a purchasable line, app synchronization, or completed MCP acceptance. No blind Add retry performed. No order/payment action.
