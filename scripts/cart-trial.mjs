@@ -113,7 +113,8 @@ export function classifyResponse(request, state) {
 }
 
 export function cleanupEligible(state) {
-  return Boolean(state.addVerified && state.line && state.contextUnchanged && !state.removeRequest && !state.unsafe);
+  return Boolean(state.addVerified && state.line && state.contextUnchanged && !state.removeRequest && !state.unsafe &&
+    (!state.restartRequired || state.restartVerified));
 }
 
 export async function main() {
@@ -138,11 +139,13 @@ export async function main() {
   const { chromium } = await import('playwright');
   let browser, page, profile, delivery, cart, baseline, snapshot, line, armed;
   let fatal = false, addSent = false, removeSent = false, restored = false, cleaning = false;
-  const state = { reads: new WeakMap(), epoch: 0, sequence: 0, applied: 0, addVerified: false, contextUnchanged: true, unsafe: false };
+  const state = { reads: new WeakMap(), epoch: 0, sequence: 0, applied: 0, addVerified: false, contextUnchanged: true, unsafe: false,
+    restartRequired: updateMode && !previewUpdate, restartVerified: false };
   const pending = new Set();
   let phase = 'startup', failurePhase = null;
   const failed = failedPhase => { fatal = true; failurePhase ??= failedPhase; };
-  const outcome = { add_sent: false, add_verified: false, price_accepted: false, remove_sent: false, restored_empty: false, cleanup_required: false };
+  const outcome = { add_sent: false, add_verified: false, price_accepted: false, remove_sent: false, restored_empty: false, cleanup_required: false,
+    restart_persistence_verified: false };
   const check = value => {
     if (!profile || !delivery || !value) fail();
     const current = contextSnapshot(profile, value, delivery);
@@ -189,7 +192,7 @@ export async function main() {
   };
   const close = () => browser?.close();
   const timer = setTimeout(() => { failed('timeout'); void close()?.catch(() => {}); }, 150000);
-  try {
+  const openBrowser = async () => {
     browser = await chromium.launchPersistentContext(directory, {
       headless: false, serviceWorkers: 'block', viewport: { width: 1280, height: 900 },
       executablePath: process.env.BHX_CHROMIUM_PATH,
@@ -284,7 +287,7 @@ export async function main() {
           if (state.addRequest) {
             if (contextSnapshot(payload, cart, delivery) !== snapshot) fail();
           }
-          profile = payload; return;
+          profile = payload; state.profileVerified = true; return;
         }
         const kind = classifyResponse(request, state);
         if (kind === 'ignore') return;
@@ -346,6 +349,9 @@ export async function main() {
       })().catch(() => { outcome.response_failure ??= responsePhase; failed(responsePhase); state.unsafe = true; state.contextUnchanged = false; });
       pending.add(task); void task.finally(() => pending.delete(task));
     });
+  };
+  try {
+    await openBrowser();
     phase = 'baseline_navigation';
     await page.goto(ORIGIN + '/tim-kiem?key=' + encodeURIComponent('cải ngọt'), { waitUntil: 'domcontentloaded' });
     phase = 'baseline_verification';
@@ -397,6 +403,27 @@ export async function main() {
       await page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
       await awaitState(() => state.updateReadVerified && (previewUpdate ? state.line?.QuantityInCart === 1 : outcome.update_verified));
       await drain(); check(cart);
+      if (!previewUpdate) {
+        phase = 'restart_close';
+        armed = null;
+        state.epoch++;
+        await close();
+        await drain();
+        if (fatal || state.unsafe) fail();
+        phase = 'restart_navigation';
+        state.epoch++;
+        state.reads = new WeakMap();
+        state.updateReadVerified = false;
+        state.profileVerified = false;
+        outcome.update_verified = false;
+        await openBrowser();
+        await page.goto(ORIGIN + '/gio-hang', { waitUntil: 'domcontentloaded', timeout: 10000 });
+        phase = 'restart_verification';
+        await awaitState(() => state.profileVerified && state.updateReadVerified && outcome.update_verified && state.line?.QuantityInCart === 2);
+        await drain(); check(cart);
+        state.restartVerified = true;
+        outcome.restart_persistence_verified = true;
+      }
     }
     phase = 'remove_ui';
     await page.goto(ORIGIN + '/gio-hang', { waitUntil: 'domcontentloaded' });
@@ -412,7 +439,8 @@ export async function main() {
     await drain();
     let cleanupTimer;
     try {
-      if (!restored && state.addVerified && state.contextUnchanged && !state.unsafe) {
+      if (!restored && state.addVerified && state.contextUnchanged && !state.unsafe &&
+          (!state.restartRequired || state.restartVerified)) {
         cleaning = true;
         await Promise.race([(async () => {
           if (!state.removeRequest) {

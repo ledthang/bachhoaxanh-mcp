@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { trialLine, priceAccepted, recordPrice, acknowledgeAdd, drainPending, trialFailed, validateRemove, validateUpdate, updateAllowed, classifyResponse, cleanupEligible } from './cart-trial.mjs';
 const line = { Id: 335195, QuantityInCart: 1, GuildId: 'test-line', Price: 6900, Total: 6900, NetUnitValue: 0 };
 const payload = (item = line, off = false) => ({ HttpCode: 200, ResultCode: 0, Value: {
@@ -112,4 +113,25 @@ const updateResponseState = { ...state, updateRequest, removeRequest: null };
 assert.equal(classifyResponse(updateRequest, updateResponseState), 'update');
 updateResponseState.removeRequest = {};
 assert.equal(classifyResponse(updateRequest, updateResponseState), 'ignore');
+const restartState = { addVerified: true, line: { ...line, QuantityInCart: 2 },
+  contextUnchanged: true, restartRequired: true, restartVerified: false };
+assert.equal(cleanupEligible(restartState), false);
+restartState.restartVerified = true;
+assert.equal(cleanupEligible(restartState), true);
+for (const change of [{ unsafe: true }, { contextUnchanged: false }, { removeRequest: {} }])
+  assert.equal(cleanupEligible({ ...restartState, ...change }), false);
+const restartRead = {}, oldRead = {};
+const restartResponses = { reads: new WeakMap(), epoch: 10, applied: 5, addRequest: {}, updateRequest: {} };
+restartResponses.reads.set(oldRead, { phase: 'trial', epoch: 9, sequence: 6 });
+restartResponses.reads.set(restartRead, { phase: 'trial', epoch: 10, sequence: 7 });
+assert.equal(classifyResponse(oldRead, restartResponses), 'ignore');
+assert.equal(classifyResponse(restartRead, restartResponses), 'trial');
+const source = await readFile(new URL('./cart-trial.mjs', import.meta.url), 'utf8');
+assert.equal((source.match(/launchPersistentContext\(directory,/g) || []).length, 1);
+assert.equal((source.match(/await openBrowser\(\)/g) || []).length, 2);
+assert.equal((source.match(/await purchase\.click/g) || []).length, 1);
+assert.equal((source.match(/await plus\.locator/g) || []).length, 1);
+assert.match(source, /await close\(\);\s*await drain\(\);[\s\S]*?state\.epoch\+\+;[\s\S]*?state\.reads = new WeakMap\(\);[\s\S]*?state\.updateReadVerified = false;[\s\S]*?state\.profileVerified = false;[\s\S]*?outcome\.update_verified = false;\s*await openBrowser\(\)/);
+assert.match(source, /await awaitState\(\(\) => state\.profileVerified && state\.updateReadVerified && outcome\.update_verified && state\.line\?\.QuantityInCart === 2\);\s*await drain\(\); check\(cart\);\s*state\.restartVerified = true;\s*outcome\.restart_persistence_verified = true;[\s\S]*?await removeExact\(\)/);
+assert.match(source, /if \(!restored[\s\S]*?\(!state\.restartRequired \|\| state\.restartVerified\)\)/);
 console.log('cart-trial offline checks passed');
