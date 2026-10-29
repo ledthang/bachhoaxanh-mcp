@@ -26,8 +26,8 @@ docker run --rm -i --init --shm-size=1g \
   bhx-mcp:local
 ```
 
-Use one process per browser profile. Do not run host browser and container against the same profile concurrently. Image contains code/dependencies only; `.dockerignore` excludes private runtime, data, and repository history. Docker build, initialize/tools-list smoke, and authenticated container cart read passed (empty verified cart). Container mutation cycle remains unverified.
+Use one process per browser profile. Do not run host browser and container against the same profile concurrently. Image contains code/dependencies only; `.dockerignore` excludes private runtime, data, and repository history. Docker build, initialize/tools-list smoke, and authenticated container cart read passed (empty verified cart). Authenticated container stdio Add 1, Update 2, Remove cycle also passed.
 
 ## Incomplete
 
-Not full implementation-spec acceptance: arbitrary-product mutations, richer product/promotion contracts, address selection, mobile-app sync, container mutation cycle, and complete acceptance suite remain unfinished. Do not call this production-ready.
+Not full implementation-spec acceptance: arbitrary-product mutations, richer product/promotion contracts, address selection, mobile-app sync, and complete acceptance suite, including read-after-write in one MCP session, remain unfinished. Do not call this production-ready.
