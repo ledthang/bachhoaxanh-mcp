@@ -262,6 +262,7 @@ export async function createCartSession({browserType, profileDirectory} = {}) {
       await serial;
       if(fatal || !browser)fail();
       await refresh();
+      if(fatal || state.unsafe || !state.contextUnchanged)fail();
       return {...projectCartRead({HttpCode:200,ResultCode:0,Value:cart}),context:{verified:true,store_id:baseline.storeId,province_id:baseline.provinceId,ward_id:baseline.wardId},observed_at:new Date().toISOString()};
     },
     mutate(name, args) {
