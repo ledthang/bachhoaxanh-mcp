@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { QUERIES, matchContext, projectProducts, queryCapture } from './catalog-poc.mjs';
 import { EventEmitter } from 'node:events';
+import { mock } from 'node:test';
 
 const page = new EventEmitter();
 let pageUrl = 'https://www.bachhoaxanh.com/tim-kiem?key=' + encodeURIComponent('ức gà');
@@ -56,4 +57,51 @@ for (const changes of [{ id: undefined }, { unit: null }, { fullName: 'https://p
   assert.throws(() => projectProducts({ data: { products: [{ ...product, ...changes }] } }));
 }
 assert.equal(QUERIES.length, 5);
+mock.timers.enable({ apis: ['setTimeout'] });
+try {
+  for (const scenario of ['missing', 'cart-only', 'profile-only', 'cart-401', '401', '403', '500', 'schema', 'rejection-unknown', 'json', 'network', 'foreign', 'before-navigation']) {
+    const observedPage = new EventEmitter();
+    const frame = {};
+    observedPage.mainFrame = () => frame;
+    observedPage.url = () => 'https://www.bachhoaxanh.com/tim-kiem?key=' + encodeURIComponent('ức gà');
+    const pending = new Set();
+    const observed = queryCapture(observedPage, 'ức gà', undefined, pending);
+    try {
+      if (scenario !== 'before-navigation') observedPage.emit('request', {
+        frame: () => frame, isNavigationRequest: () => true, url: observedPage.url,
+      });
+      const request = { frame: () => scenario === 'foreign' ? {} : frame,
+        isNavigationRequest: () => false,
+        url: () => 'https://api.bachhoaxanh.com/' + (scenario.startsWith('cart-') ? 'OrderV2/get' : 'profile/full-profile'),
+        method: () => 'POST', postDataJSON: () => delivery };
+      if (scenario !== 'missing') {
+        observedPage.emit('request', request);
+        if (scenario === 'network') observedPage.emit('requestfailed', request);
+        else observedPage.emit('response', { request: () => request,
+          status: () => scenario === 'cart-401' ? 401 : Number(scenario) || 200,
+          ok: () => !['401', '403', '500', 'cart-401'].includes(scenario),
+          json: async () => {
+            if (scenario === 'json') throw new Error('PRIVATE_TOKEN');
+            return scenario === 'cart-only' ? { HttpCode: 200, ResultCode: 0, Value: cart } :
+              scenario === 'profile-only' ? profile :
+              scenario === 'rejection-unknown' ? { isSuccess: false, message: 'PRIVATE_TOKEN' } : {};
+          } });
+      }
+      await Promise.all([...pending]);
+      mock.timers.tick(30000);
+      const expected = ['401', '403'].includes(scenario) ? 'AUTH_REQUIRED' :
+        ['500', 'cart-401'].includes(scenario) ? 'HTTP_FAILED' : scenario === 'network' ? 'NETWORK_FAILED' :
+        scenario === 'json' ? 'RESPONSE_JSON_INVALID' :
+        ['schema', 'rejection-unknown'].includes(scenario) ? 'PROFILE_SCHEMA_INVALID' : 'CAPTURE_TIMEOUT';
+      await assert.rejects(observed.ready, { message: expected });
+      assert.throws(observed.check, { message: expected });
+      const diagnostics = observed.diagnostics();
+      assert.ok(Object.values(diagnostics).every(value => typeof value === 'boolean'));
+      assert.equal(diagnostics.cart_valid, scenario === 'cart-only');
+      assert.equal(diagnostics.profile_valid, scenario === 'profile-only');
+      assert.doesNotMatch(JSON.stringify(diagnostics), /PRIVATE|token|address|entityId/i);
+    } finally { observed.dispose(); }
+    for (const event of ['request', 'response', 'requestfailed']) assert.equal(observedPage.listenerCount(event), 0);
+  }
+} finally { mock.timers.reset(); }
 console.log('PASS: catalog offline context/schema/allowlist/privacy checks; browser not run.');

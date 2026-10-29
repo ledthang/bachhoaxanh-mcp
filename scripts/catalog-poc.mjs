@@ -172,6 +172,7 @@ export function queryCapture(page, query, baseline, pending) {
     const kind = requests.get(request);
     if (!kind) return;
     const task = (async () => {
+      if (kind === 'profile' && [401, 403].includes(response.status())) fail('AUTH_REQUIRED');
       if (!response.ok()) fail('HTTP_FAILED');
       let payload;
       try { payload = await response.json(); } catch { fail('RESPONSE_JSON_INVALID'); }
@@ -209,6 +210,10 @@ export function queryCapture(page, query, baseline, pending) {
   return {
     ready,
     check,
+    diagnostics: () => ({ profile_request_seen: [...requests.values()].includes('profile'),
+      profile_valid: Boolean(profile), cart_request_seen: [...requests.values()].includes('cart'),
+      cart_valid: Boolean(cart), search_request_seen: Boolean(acceptedSearch),
+      products_valid: Boolean(products), requests_pending: inflight.size > 0 }),
     products: () => products,
     dispose() {
       clearTimeout(timer);
@@ -276,6 +281,9 @@ async function main() {
     for (const record of records) console.log(JSON.stringify(record));
   } catch (error) {
     console.error('CATALOG_POC_FAILED: ' + (error instanceof CatalogError ? error.message : stage));
+    if (error instanceof CatalogError && error.message === 'CAPTURE_TIMEOUT' && capture) {
+      console.error(JSON.stringify(capture.diagnostics()));
+    }
     process.exitCode = 1;
   } finally {
     capture?.dispose();
