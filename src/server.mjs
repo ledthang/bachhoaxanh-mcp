@@ -41,7 +41,7 @@ async function handle(m){
  try{
   if(session && ['bhx_get_cart','bhx_cart_summary'].includes(name)){const data=await session.readCart();return {content:[{type:'text',text:JSON.stringify(data)}]};}
   if(session) throw Error('Dedicated mutation context active; separate read browser cannot acquire profile');
-  const s=await snapshotReader(args.query,name==='bhx_search_products');
+  const s=await snapshotReader(name==='bhx_search_products'?args.query:'cải ngọt',name==='bhx_search_products');
   const data=name==='bhx_auth_status'?{authenticated:s.authenticated,session_status:s.session_status,requires_login:s.requires_login}:name==='bhx_list_addresses'?{addresses:s.addresses}:name==='bhx_get_delivery_context'?s.context:name==='bhx_search_products'?{products:s.products,context:s.context,limit:3,price_status:'catalog-observed-not-guaranteed-payable'}:{...s.cart,context:s.context};
   return {content:[{type:'text',text:JSON.stringify({...data,observed_at:s.observed_at})}]};
  }catch{return {isError:true,content:[{type:'text',text:'BHX_READ_UNVERIFIED: session, selected address or response could not be verified. No cart mutation performed.'}]};}

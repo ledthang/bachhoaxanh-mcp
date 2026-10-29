@@ -70,14 +70,12 @@ export async function readSnapshot(query='cải ngọt', requireProducts=false, 
       })().catch(()=>{fatal=true;});pending.add(task);void task.finally(()=>pending.delete(task));
     });
     await browser.setOffline(false);
-    if(productId!==null){await page.goto(SITE+'/tim-kiem?key='+encodeURIComponent(query),{waitUntil:'domcontentloaded',timeout:30000});const warm=Date.now()+15000;while(!fatal&&(!profile||!cart)&&Date.now()<warm)await page.waitForTimeout(100);}
-    if(productId!==null&&!cart){await page.goto(SITE+'/gio-hang',{waitUntil:'domcontentloaded',timeout:30000});const end=Date.now()+10000;while(!fatal&&!cart&&Date.now()<end)await page.waitForTimeout(100);}
-    await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
-    if(requireProducts){
-      const warm=Date.now()+15000;
-      while(!fatal&&(!profile||!cart)&&Date.now()<warm)await page.waitForTimeout(100);
-      await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
-    }
+    // Cart POST only fires after the site enters /gio-hang; visit it first, then the target page.
+    const cartDeadline=Date.now()+30000;
+    while(!fatal&&!cart&&Date.now()<cartDeadline){await page.goto(SITE+'/gio-hang',{waitUntil:'domcontentloaded',timeout:30000});while(!fatal&&!cart&&Date.now()<cartDeadline)await page.waitForTimeout(300);}
+    if(fatal||!cart)fail();
+    if(productId===null){await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});}
+    else{await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});}
     const deadline=Date.now()+20000;
     while(!fatal&&(!profile||!cart||(requireProducts&&!products)||(productId!==null&&!product))&&Date.now()<deadline)await page.waitForTimeout(100);
     while(pending.size)await Promise.allSettled([...pending]);
