@@ -2,6 +2,7 @@ import { mkdir, chmod, open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { validateRefresh } from './cart-refresh.mjs';
 import { matchContext } from './catalog-poc.mjs';
 
 const ORIGIN = 'https://www.bachhoaxanh.com';
@@ -176,6 +177,10 @@ async function main() {
   let productDetailRequest = null;
   let observedCartPath = null;
   let cartReads = 0;
+  let refreshBaseline, refreshRequest;
+  let refreshVerified = false;
+  const navigationReads = new Set();
+  let navigationReadVerified = false;
   let phase = 'SETUP';
   let page;
   const diagnostics = { profile_observed: false, cart_observed: false };
@@ -217,13 +222,27 @@ async function main() {
     await browser.route('**/*', async route => {
       try {
         const request = route.request();
+        if (request.url() === API + '/gw/cart/api/OrderV2/getAfter') {
+          if (!fatal && observedCartPath === '/gio-hang' && !refreshRequest &&
+              request.frame() === page.mainFrame() && request.frame().url() === ORIGIN + '/gio-hang' &&
+              !request.isNavigationRequest() &&
+              request.method() === 'POST' && validateRefresh(request.postData(), refreshBaseline)) {
+            refreshRequest = request;
+            await route.continue();
+          } else { stop('REFRESH_REQUEST_UNVERIFIED'); await route.abort(); }
+          return;
+        }
         if (fatal || (request.isNavigationRequest() && request.frame() !== page.mainFrame()) ||
             !allowedRequest(request.url(), request.method(), request.isNavigationRequest(), request.resourceType(), observedCartPath)) {
           const known = blockedKnownRequest(request.url(), request.method());
           if (known) blocked.set(`${known.method} ${known.route}`, known);
           if (request.isNavigationRequest() && request.frame() === page.mainFrame()) stop('NAVIGATION_CHANGED');
           await route.abort();
-        } else await route.continue();
+        } else {
+          if (request.url() === API + CART && ['CART_NAVIGATION', 'CART_CONTEXT'].includes(phase) && request.method() === 'POST' && !request.isNavigationRequest() && request.postData() &&
+              request.frame() === page.mainFrame() && request.frame().url() === ORIGIN + '/gio-hang') navigationReads.add(request);
+          await route.continue();
+        }
         if (!fatal && new URL(request.url()).origin === API && new URL(request.url()).pathname === DETAIL &&
             allowedRequest(request.url(), request.method(), false, request.resourceType())) {
           productDetailRequest = { method: request.method(),
@@ -237,6 +256,19 @@ async function main() {
     });
     page.on('response', response => {
       const url = new URL(response.url());
+      if (response.url() === API + '/gw/cart/api/OrderV2/getAfter') {
+        const task = (async () => {
+          if (response.request() !== refreshRequest || !response.ok()) fail('REFRESH_READ_FAILED');
+          const payload = await response.json();
+          if (payload?.Value?.CartId !== refreshBaseline?.cartId ||
+              payload?.Value?.ShipAddressId !== cart?.ShipAddressId ||
+              payload?.Value?.StoreId !== cart?.StoreId) fail('CONTEXT_CHANGED');
+          projection = projectCart(payload);
+          refreshVerified = true;
+        })().catch(() => stop('REFRESH_READ_FAILED'));
+        pending.add(task); void task.finally(() => pending.delete(task));
+        return;
+      }
       if (url.origin !== API || ![PROFILE, CART].includes(url.pathname)) return;
       const task = (async () => {
         if (response.request().frame() !== page.mainFrame()) fail('READ_FAILED');
@@ -257,9 +289,14 @@ async function main() {
           if ((delivery && JSON.stringify(delivery) !== JSON.stringify(nextDelivery)) ||
               (cart && JSON.stringify(cart) !== JSON.stringify(nextCart))) fail('CONTEXT_CHANGED');
           projection = projectCart(payload);
+          const nextRefresh = { ...Object.fromEntries(['provinceId', 'districtId', 'wardId', 'storeId']
+            .map(k => [k, body?.[k]])), cartId: payload?.Value?.CartId };
+          if (refreshBaseline && JSON.stringify(refreshBaseline) !== JSON.stringify(nextRefresh)) fail('CONTEXT_CHANGED');
+          refreshBaseline = nextRefresh;
           cart = nextCart;
           delivery = nextDelivery;
           cartReads += 1;
+          if (navigationReads.has(response.request())) navigationReadVerified = true;
         }
         check();
       })().catch(error => {
@@ -294,7 +331,8 @@ async function main() {
     phase = 'PRODUCT_CONTEXT';
     await drain();
     if (!check() || page.url() !== ORIGIN + PATH) fail('CONTEXT_UNVERIFIED');
-    if (ui.cart_paths.includes('/gio-hang')) {
+    // Cart route was independently observed on the website; verify its full read flow.
+    if (ui.cart_paths.includes('/gio-hang') || await page.locator('#cart-icon').count() === 1) {
       observedCartPath = '/gio-hang';
       const previousReads = cartReads;
       phase = 'CART_NAVIGATION';
@@ -302,15 +340,18 @@ async function main() {
       if (!cartPage?.ok()) fail('NAVIGATION_FAILED');
       phase = 'CART_CONTEXT';
       const cartDeadline = Date.now() + 10000;
-      while (cartReads === previousReads && Date.now() < cartDeadline) {
+      while ((!navigationReadVerified || !refreshVerified) && Date.now() < cartDeadline) {
         check();
         await page.waitForTimeout(100);
       }
       await drain();
       if (!check() || page.url() !== ORIGIN + observedCartPath) fail('CONTEXT_UNVERIFIED');
+      if (!navigationReadVerified) fail('CART_ROUTE_READ_NOT_OBSERVED');
+      if (!refreshVerified) fail('REFRESH_NOT_OBSERVED');
       diagnostics.cart_route_read_observed = cartReads > previousReads;
     }
 
+    if (!refreshVerified || !navigationReadVerified) fail('CART_ROUTE_READ_NOT_OBSERVED');
     phase = 'BROWSER_CLOSE';
     await close();
     await drain();
@@ -324,6 +365,7 @@ async function main() {
       await output.writeFile(JSON.stringify({ outcome: 'READ_ONLY_DISCOVERY', product_id: 335195,
         approved_unit_price_vnd: 5000, verified5000: ui.verified5000, profile_cart_match: true, cart: projection, ui,
         readonly_product_detail_request: productDetailRequest,
+        cart_refresh_verified: refreshVerified,
         next_task: 'Review observed cart/UI schema before enabling any mutation.' }, null, 2) + '\n');
     } finally {
       try { await output.close(); } catch (error) {

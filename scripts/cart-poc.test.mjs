@@ -194,4 +194,7 @@ assert.ok(capture >= 0 && capture < warmupNavigation && warmupNavigation < valid
   validated < productNavigation && productNavigation < headingWait && headingWait < priceWait);
 assert.match(source.slice(warmupNavigation, validated), /await drain\(\);[\s\S]*if \(!check\(\)\)/);
 assert.doesNotMatch(source, /\.click\(/);
+assert.ok(source.indexOf("if (!refreshVerified || !navigationReadVerified) fail('CART_ROUTE_READ_NOT_OBSERVED');") < source.indexOf("const output = await open"));
+assert.match(source, /navigationReads\.has\(response\.request\(\)\)/);
+assert.match(source, /request\.frame\(\)\.url\(\) === ORIGIN \+ '\/gio-hang'/);
 console.log('PASS: cart offline request/context/schema/privacy/UI guards; browser not run.');
