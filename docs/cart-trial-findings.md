@@ -11,6 +11,12 @@ A bounded, separately approved trial targeted product 335195, quantity 1, initia
 - Exact-line removal via website UI required confirmation `Đồng ý`. Actual Remove body included nested `data.wardId` in addition to public-source builder fields. Recovery validated target product, quantity, GUID, cart identity and context; only exact Remove was forwarded.
 - Remove succeeded. Reload read verified empty cart; independent browser restart then observed `TotalItemShow: 0`, authenticated profile and selected-address/province/ward/store equality.
 
+## Follow-up read-only evidence
+
+- Product-detail HTTP 200 returned target `data.id: 335195`, one observed box-buy price entry with `price: 5000`, `sysPrice: 6900`, `discountPercent: 28`, `type: 1`, `status: 1`; box-buy `type: 1`, `scenario: 0`.
+- A fresh website-generated Add interception observed `productId: 335195`, `quantity: 1`, `productType: 1`, `scenario: 0`, and empty `listPromotion`. Request was aborted, not forwarded. Authenticated context, empty-cart guard and main product UI price passed in that run.
+- These values agree on the observed box-buy type/scenario; no mismatch was found there. This does not establish promotion eligibility or explain the previous cart response. Do not invent promotion IDs or add unobserved request fields to force the catalog price.
+
 ## Limits
 
 No quantity-2 update, full restart-persistence cycle with a purchasable line, app synchronization, or completed MCP acceptance. No blind Add retry performed. No order/payment action.
