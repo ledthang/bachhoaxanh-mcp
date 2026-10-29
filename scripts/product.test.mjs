@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {projectProduct,quantityAvailability} from '../src/product.mjs';
+const fixture={data:{id:335195,boxBuys:[{id:335195,type:1,scenario:0,productPrices:[{price:5000,sysPrice:6900,isCanBuy:true,quantity:200}]}]}};
+const p=projectProduct(fixture,335195);
+assert.equal(p.stock_quantity,null);assert.equal(quantityAvailability(p,2).status,'unknown');
+assert.equal(p.availability,'unknown');
+assert.throws(()=>projectProduct({data:{id:335195,boxBuys:[{id:335195,productPrices:[null]}]}},335195),/BHX_PRODUCT_UNVERIFIED/);
+assert.throws(()=>projectProduct({data:{id:335195,boxBuys:[{id:335195,productPrices:[{price:8000,sysPrice:6900}]}]}},335195),/BHX_PRODUCT_UNVERIFIED/);
+assert.throws(()=>quantityAvailability(null,2),/BHX_PRODUCT_UNVERIFIED/);
+assert.throws(()=>projectProduct(fixture,1));assert.throws(()=>projectProduct({},335195));assert.throws(()=>quantityAvailability(p,0));
+fixture.data.boxBuys[0].productPrices[0].price=-1;assert.throws(()=>projectProduct(fixture,335195));
+const {createHandler}=await import('../src/server.mjs');let reads=0;
+const h=createHandler({snapshotReader:async()=>{reads++;throw Error('not read');}});
+await h.handle({jsonrpc:'2.0',id:1,method:'initialize'});
+for(const args of [{items:[]},{items:[{product_id:335195,quantity:0}]},{items:[{product_id:1,quantity:2}]},{items:[{product_id:335195,quantity:2,url:'https://invalid'}]}])await assert.rejects(()=>h.handle({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'bhx_check_availability',arguments:args}}),e=>e.code===-32602);
+assert.equal(reads,0);console.log('PASS: product projection fail-closed, quantity not inventory, invalid args no browser.');

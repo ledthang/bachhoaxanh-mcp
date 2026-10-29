@@ -1,4 +1,5 @@
 import { chromium } from 'playwright';
+import { projectProduct } from './product.mjs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -23,10 +24,11 @@ export function projectCartRead(payload) {
   }
   return {items,total:c.CartTotal.Total,currency:'VND',price_source:'authenticated-cart-read',availability:items.length?'observed-cart-state':'unknown'};
 }
-export async function readSnapshot(query='cải ngọt', requireProducts=false) {
+export async function readSnapshot(query='cải ngọt', requireProducts=false, productId=null) {
   if(typeof query!=='string'||query.length<1||query.length>100||/[\p{Cc}\p{Cf}]/u.test(query))throw Error('INVALID_QUERY');
-  const url=SITE+'/tim-kiem?key='+encodeURIComponent(query);
-  let browser,profile,cart,delivery,searchContext,products,fatal;
+  if(productId!==null&&productId!==335195)throw Error('PRODUCT_ROUTE_UNVERIFIED');
+  const url=productId===null?SITE+'/tim-kiem?key='+encodeURIComponent(query):SITE+'/rau-sach/cai-ngot-tui-400gr';
+  let browser,profile,cart,delivery,searchContext,products,fatal,product,detailContext;
   const pending=new Set();
   const timer=setTimeout(()=>{fatal=true;void browser?.close().catch(()=>{});},55000);
   try{
@@ -39,7 +41,7 @@ export async function readSnapshot(query='cải ngọt', requireProducts=false) 
         if(process.env.BHX_DIAGNOSTICS==='1'&&u.origin===API&&/search/i.test(u.pathname))console.error(JSON.stringify({search_path:u.pathname,method:q.method(),keys:(()=>{try{return Object.keys(q.postDataJSON()||{});}catch{return [];}})()}));
         if(u.origin===API&&/search/i.test(u.pathname)&&q.method()==='POST'&&process.env.BHX_DIAGNOSTICS==='1')console.error(JSON.stringify({query_match:q.postDataJSON()?.keywords===query}));
         allow=q.frame()===page.mainFrame()&&(
-          (q.isNavigationRequest()&&q.url()===url&&q.method()==='GET')||
+          (q.isNavigationRequest()&&[url,SITE+'/gio-hang',SITE+'/tim-kiem?key='+encodeURIComponent(query)].includes(q.url())&&q.method()==='GET')||
           (!q.isNavigationRequest()&&allowedRequest(q.url(),q.method(),false,q.resourceType()))||
           (!q.isNavigationRequest()&&q.url().toLowerCase()===SEARCH.toLowerCase()&&q.method()==='POST')||
           (!q.isNavigationRequest()&&q.url()===API+'/gw/search/GetSuggestSearchNew'&&q.method()==='POST'&&q.postDataJSON()?.keyword===query)||
@@ -49,10 +51,12 @@ export async function readSnapshot(query='cải ngọt', requireProducts=false) 
       if(allow)await route.continue();else await route.abort();
     });
     page.on('response',r=>{
-      if(![PROFILE,CART].includes(r.url())&&r.url().toLowerCase()!==SEARCH.toLowerCase())return;
+      const detail=new URL(r.url()).pathname==='/gw/Product/GetProductDetail'&&new URL(r.url()).origin===API;
+      if(!detail&&![PROFILE,CART].includes(r.url())&&r.url().toLowerCase()!==SEARCH.toLowerCase())return;
       const task=(async()=>{
         if(!r.ok()||r.request().frame()!==page.mainFrame())fail();
         const b=await Promise.race([r.json(),new Promise((_,reject)=>{const t=setTimeout(()=>reject(Error('READ_TIMEOUT')),10000);t.unref();})]);
+        if(detail){if(productId===null)return;const u=new URL(r.url());detailContext=Object.fromEntries(['provinceId','wardId','storeId'].map(k=>[k,Number(u.searchParams.get(k))]));product=projectProduct(b,productId);return;}
         if(r.url()===PROFILE){profile=b;return;}
         const raw=r.request().postDataJSON();
         if(r.url()===CART){
@@ -66,6 +70,8 @@ export async function readSnapshot(query='cải ngọt', requireProducts=false) 
       })().catch(()=>{fatal=true;});pending.add(task);void task.finally(()=>pending.delete(task));
     });
     await browser.setOffline(false);
+    if(productId!==null){await page.goto(SITE+'/tim-kiem?key='+encodeURIComponent(query),{waitUntil:'domcontentloaded',timeout:30000});const warm=Date.now()+15000;while(!fatal&&(!profile||!cart)&&Date.now()<warm)await page.waitForTimeout(100);}
+    if(productId!==null&&!cart){await page.goto(SITE+'/gio-hang',{waitUntil:'domcontentloaded',timeout:30000});const end=Date.now()+10000;while(!fatal&&!cart&&Date.now()<end)await page.waitForTimeout(100);}
     await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
     if(requireProducts){
       const warm=Date.now()+15000;
@@ -73,14 +79,17 @@ export async function readSnapshot(query='cải ngọt', requireProducts=false) 
       await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
     }
     const deadline=Date.now()+20000;
-    while(!fatal&&(!profile||!cart||(requireProducts&&!products))&&Date.now()<deadline)await page.waitForTimeout(100);
+    while(!fatal&&(!profile||!cart||(requireProducts&&!products)||(productId!==null&&!product))&&Date.now()<deadline)await page.waitForTimeout(100);
     while(pending.size)await Promise.allSettled([...pending]);
     if(process.env.BHX_DIAGNOSTICS==='1')console.error(JSON.stringify({fatal:!!fatal,profile:!!profile,cart:!!cart,products:!!products,url_match:page.url()===url}));
-    if(fatal||page.url()!==url||!profile||!cart||(requireProducts&&!products))fail();
+    if(fatal||page.url()!==url||!profile||!cart||(requireProducts&&!products)||(productId!==null&&!product))fail();
+    if(productId!==null){const heading=page.locator('div.sticky h1');await heading.waitFor({state:'visible',timeout:10000});if(await heading.count()!==1)fail();const name=(await heading.innerText()).trim();if(!name||name.length>300||/[\p{Cc}\p{Cf}]/u.test(name))fail();product={...product,name,package_size:{raw_label:name,normalized:null,source:'product-heading'},promotion:{status:'unknown'}};}
+    if(fatal)fail();
     const match=matchContext(profile,cart.Value,delivery,searchContext);
+    if(productId!==null&&['provinceId','wardId','storeId'].some(k=>!Number.isSafeInteger(detailContext?.[k])||detailContext[k]!==delivery[k]))fail();
     if(!match.profile_cart_match||(requireProducts&&!match.search_cart_match))fail();
     const context={address_id:String(cart.Value.ShipAddressId),store_id:delivery.storeId,province_id:delivery.provinceId,ward_id:delivery.wardId,verified:true,source:'authenticated-browser'};
     context.delivery_context_id=createHash('sha256').update(JSON.stringify(context)).digest('hex').slice(0,24);
-    return {authenticated:true,session_status:'valid',requires_login:false,addresses:profile.data.addressReceiver.map((a,i)=>({id:String(a.addressId),label:`Address ${i+1}`,selected:String(a.addressId)===context.address_id})),context,cart:projectCartRead(cart),products,observed_at:new Date().toISOString()};
+    return {authenticated:true,session_status:'valid',requires_login:false,addresses:profile.data.addressReceiver.map((a,i)=>({id:String(a.addressId),label:`Address ${i+1}`,selected:String(a.addressId)===context.address_id})),context,cart:projectCartRead(cart),products,product,observed_at:new Date().toISOString()};
   }finally{clearTimeout(timer);await browser?.close();}
 }

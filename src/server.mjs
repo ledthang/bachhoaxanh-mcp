@@ -1,11 +1,13 @@
 import { createInterface } from 'node:readline';
 import { readSnapshot } from './browser.mjs';
+import { quantityAvailability } from './product.mjs';
 import { pathToFileURL } from 'node:url';
 import { createCartSession, validateMutation } from './cart-mutations.mjs';
 const mutationNames = ['bhx_add_to_cart', 'bhx_update_cart_item', 'bhx_remove_cart_item'];
 const names=['bhx_auth_status','bhx_list_addresses','bhx_get_delivery_context','bhx_get_cart','bhx_cart_summary','bhx_search_products'];
 const tools=names.map(name=>({name,description:'Read authenticated BHX state. No checkout or payment. Catalog price is not guaranteed payable price.',inputSchema:{type:'object',properties:name==='bhx_search_products'?{query:{type:'string',minLength:1,maxLength:100}}:{},required:name==='bhx_search_products'?['query']:[],additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false}}));
 for (const name of mutationNames) tools.push({name,description:'Explicitly authorized, bounded cart mutation. Only product 335195 variant 1 scenario 0; Add quantity 1 into empty cart, update runtime-owned line 1 to 2, remove runtime-owned line. No checkout/payment. Uncertain results require manual inspection; never retry blindly.',inputSchema:{type:'object',properties:{user_authorized:{type:'boolean',const:true},...(name==='bhx_add_to_cart'?{product_id:{type:'integer',const:335195},quantity:{type:'integer',const:1},max_unit_price_vnd:{type:'integer',minimum:1}}:{line_id:{type:'string',minLength:1,maxLength:200},...(name==='bhx_update_cart_item'?{quantity:{type:'integer',const:2}}:{})})},required:name==='bhx_add_to_cart'?['user_authorized','product_id','quantity','max_unit_price_vnd']:name==='bhx_update_cart_item'?['user_authorized','line_id','quantity']:['user_authorized','line_id'],additionalProperties:false},annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:false}});
+for(const name of ['bhx_get_product','bhx_check_availability'])tools.push({name,description:'Read observed product detail in verified delivery context. Currently product 335195 only. Quantity stock unknown unless explicitly proven.',inputSchema:{type:'object',properties:name==='bhx_get_product'?{product_id:{type:'integer',const:335195}}:{items:{type:'array',minItems:1,maxItems:1,items:{type:'object',properties:{product_id:{type:'integer',const:335195},quantity:{type:'integer',minimum:1,maximum:1000}},required:['product_id','quantity'],additionalProperties:false}}},required:[name==='bhx_get_product'?'product_id':'items'],additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false}});
 export function createHandler({sessionFactory=createCartSession, snapshotReader=readSnapshot}={}) {
 let initialized=false, session;
 async function handle(m){
@@ -22,6 +24,18 @@ async function handle(m){
   try { validateMutation(name,args); } catch(error) { throw {code:-32602,message:error.message}; }
   try { session ??= await sessionFactory(); const data=await session.mutate(name,args); return {content:[{type:'text',text:JSON.stringify(data)}]}; }
   catch { return {isError:true,content:[{type:'text',text:'BHX_MUTATION_UNVERIFIED: mutation may have applied. No automatic retry or cleanup. Inspect cart. Only proven product/quantity and runtime-owned lines supported.'}]}; }
+ }
+ if(['bhx_get_product','bhx_check_availability'].includes(name)){
+  const plain=v=>v&&typeof v==='object'&&!Array.isArray(v);
+  const exact=(v,ks)=>plain(v)&&Object.keys(v).length===ks.length&&ks.every(k=>Object.hasOwn(v,k));
+  const item=name==='bhx_get_product'?args:args?.items?.[0];
+  if((name==='bhx_get_product'? !exact(args,['product_id']): !exact(args,['items'])||!Array.isArray(args.items)||args.items.length!==1||!exact(item,['product_id','quantity'])||!Number.isSafeInteger(item.quantity)||item.quantity<1||item.quantity>1000)||item?.product_id!==335195)throw {code:-32602,message:'Unsupported product or invalid arguments'};
+  try{
+   if(session)throw Error('Mutation browser active');
+   const s=await snapshotReader('cải ngọt',false,item.product_id);
+   const data=name==='bhx_get_product'?s.product:{items:[quantityAvailability(s.product,item.quantity)]};
+   return {content:[{type:'text',text:JSON.stringify({...data,context:s.context,observed_at:s.observed_at})}]};
+  }catch{return {isError:true,content:[{type:'text',text:'BHX_PRODUCT_UNVERIFIED: authenticated product context not verified'}]};}
  }
  if(!names.includes(name)||!args||typeof args!=='object'||Array.isArray(args)||Object.keys(args).some(k=>name!=='bhx_search_products'||k!=='query')||(name==='bhx_search_products'&&(typeof args.query!=='string'||args.query.length<1||args.query.length>100||/[\p{Cc}\p{Cf}]/u.test(args.query))))throw {code:-32602,message:'Invalid tool arguments'};
  try{
