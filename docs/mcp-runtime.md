@@ -30,4 +30,4 @@ Use one process per browser profile. Do not run host browser and container again
 
 ## Incomplete
 
-Not full implementation-spec acceptance: arbitrary-product mutations, richer product/promotion contracts, address selection, mobile-app sync, and complete acceptance suite, including read-after-write in one MCP session, remain unfinished. Do not call this production-ready.
+Not full implementation-spec acceptance: arbitrary-product mutations, richer product/promotion contracts, address selection, mobile-app sync, and complete acceptance suite remain unfinished. Read-after-write in one MCP session passed through real stdio (quantity 2), followed by exact-line removal. Do not call this production-ready.
