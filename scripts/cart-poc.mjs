@@ -81,6 +81,12 @@ export function projectCart(payload) {
       !['TotalItemShow', 'GroupSOStep2InCart', 'CartTotal'].every(key => Object.hasOwn(cart, key)) ||
       !Number.isSafeInteger(cart.TotalItemShow) || cart.TotalItemShow < 0) fail('CART_SCHEMA_UNVERIFIED');
   if (cart.TotalItemShow !== 0) fail('EXISTING_ITEMS_STOP');
+  const inactive = cart.GroupCartOff;
+  if (inactive != null) {
+    if (typeof inactive !== 'object' || Array.isArray(inactive) ||
+        !Array.isArray(inactive.ListCartItemBuy)) fail('CART_SCHEMA_UNVERIFIED');
+    if (inactive.ListCartItemBuy.length) fail('EXISTING_ITEMS_STOP');
+  }
   const groups = cart.GroupSOStep2InCart;
   if (groups !== null && !Array.isArray(groups)) fail('CART_SCHEMA_UNVERIFIED');
   if (groups?.length) fail('EXISTING_ITEMS_STOP');

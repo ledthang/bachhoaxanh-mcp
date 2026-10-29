@@ -62,6 +62,16 @@ for (const groups of [null, []]) {
   assert.equal(result.totals['CartTotal.Total'], 0);
   assert.doesNotMatch(JSON.stringify(result), /CartId|synthetic-cart/);
 }
+// Inactive lines still belong to user, even when active count and total are zero.
+for (const inactive of [null, { ListCartItemBuy: [] }]) {
+  assert.equal(projectCart({ ...observed, Value: { ...observed.Value,
+    GroupCartOff: inactive } }).empty_verified, true);
+}
+for (const inactive of [{ ListCartItemBuy: [{ Id: 335195 }] }, {}, [], false,
+  { ListCartItemBuy: null }, { ListCartItemBuy: {} }]) {
+  assert.throws(() => projectCart({ ...observed, Value: { ...observed.Value,
+    GroupCartOff: inactive } }));
+}
 for (const [field, values] of [
   ['GroupSOStep2InCart', [undefined, {}, false, '', [{}], [{ ListCartItemBuy: [] }], [{ ListCartItemBuy: [{}] }]]],
   ['CartTotal', [undefined, null, [], 0, {}, { Total: '0' }, { Total: null }, { Total: NaN },
