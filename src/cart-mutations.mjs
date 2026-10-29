@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { projectCartRead } from './browser.mjs';
 import { allowedRequest, projectCart, contextSnapshot, productUI } from '../scripts/cart-poc.mjs';
 import { validateAdd, guardRequest as popupGuard } from '../scripts/cart-cycle.mjs';
 import { validateRefresh } from '../scripts/cart-refresh.mjs';
@@ -257,6 +258,12 @@ export async function createCartSession({browserType, profileDirectory} = {}) {
   let serial = Promise.resolve();
   return {
     close,
+    async readCart() {
+      await serial;
+      if(fatal || !browser)fail();
+      await refresh();
+      return {...projectCartRead({HttpCode:200,ResultCode:0,Value:cart}),context:{verified:true,store_id:baseline.storeId,province_id:baseline.provinceId,ward_id:baseline.wardId},observed_at:new Date().toISOString()};
+    },
     mutate(name, args) {
       const operation = serial.then(async () => {
         validateMutation(name, args);

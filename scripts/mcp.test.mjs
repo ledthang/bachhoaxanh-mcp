@@ -12,4 +12,10 @@ let created=0;const handler=createHandler({sessionFactory:async()=>{created++;th
 await handler.handle({jsonrpc:'2.0',id:1,method:'initialize'});
 for(const extra of [{},{id:null}])await assert.rejects(()=>handler.handle({jsonrpc:'2.0',...extra,method:'tools/call',params:{name:'bhx_add_to_cart',arguments:{product_id:335195,quantity:1,max_unit_price_vnd:6900,user_authorized:true}}}),e=>e.code===-32600);
 assert.equal(created,0);
+let reads=0;const active=createHandler({sessionFactory:async()=>({mutate:async()=>({verified:true}),readCart:async()=>{reads++;return {items:[],context:{verified:true}};},close:async()=>{}}),snapshotReader:async()=>assert.fail('must reuse active browser')});
+await active.handle({jsonrpc:'2.0',id:1,method:'initialize'});
+await active.handle({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'bhx_add_to_cart',arguments:{product_id:335195,quantity:1,max_unit_price_vnd:6900,user_authorized:true}}});
+const after=await active.handle({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'bhx_get_cart',arguments:{}}});
+assert.equal(reads,1);assert.equal(JSON.parse(after.content[0].text).context.verified,true);await active.close();
+
 console.log('PASS: stdio protocol, mutation notification rejection before side effects, offline cart fixture.');

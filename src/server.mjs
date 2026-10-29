@@ -25,6 +25,7 @@ async function handle(m){
  }
  if(!names.includes(name)||!args||typeof args!=='object'||Array.isArray(args)||Object.keys(args).some(k=>name!=='bhx_search_products'||k!=='query')||(name==='bhx_search_products'&&(typeof args.query!=='string'||args.query.length<1||args.query.length>100||/[\p{Cc}\p{Cf}]/u.test(args.query))))throw {code:-32602,message:'Invalid tool arguments'};
  try{
+  if(session && ['bhx_get_cart','bhx_cart_summary'].includes(name)){const data=await session.readCart();return {content:[{type:'text',text:JSON.stringify(data)}]};}
   if(session) throw Error('Dedicated mutation context active; separate read browser cannot acquire profile');
   const s=await snapshotReader(args.query,name==='bhx_search_products');
   const data=name==='bhx_auth_status'?{authenticated:s.authenticated,session_status:s.session_status,requires_login:s.requires_login}:name==='bhx_list_addresses'?{addresses:s.addresses}:name==='bhx_get_delivery_context'?s.context:name==='bhx_search_products'?{products:s.products,context:s.context,limit:3,price_status:'catalog-observed-not-guaranteed-payable'}:{...s.cart,context:s.context};
