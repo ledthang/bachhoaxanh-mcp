@@ -15,7 +15,9 @@ node scripts/cart-cycle.test.mjs
 
 `cart-cycle.mjs` is named for future cycle research but currently performs **abort-only Add preflight**. It never forwards Add. No mutation-enabling option exists.
 
-Observed real browser preflight passed: authenticated selected-address/cart/request context equality, empty cart contract, main product UI price 5,000 VND, product 335195 and quantity 1 in the website-generated Add request. Request was aborted before transmission. Empty contract observed `GroupSOStep2InCart: null`, `TotalItemShow: 0`, `CartTotal.Total: 0`. Nonempty line schema remains unverified.
+Historical preflight reported a pass, but later investigation found it blocked `GetPopupProduct`, a purchase prerequisite whose failure can trigger website fallback Add. That historical pass does **not** establish an intact purchase/promotion flow. Current guard fails closed when this endpoint is blocked; live reproduction now stops before Add, with `preflight_passed: false`.
+
+Historical observations: authenticated selected-address/cart/request context equality, empty cart contract, main product UI price 5,000 VND, product 335195 and quantity 1 in the website-generated Add request. Request was aborted before transmission. Empty contract observed `GroupSOStep2InCart: null`, `TotalItemShow: 0`, `CartTotal.Total: 0`. Nonempty line schema remains unverified.
 
 Main purchase control is inside the direct `div.px-9px` child of the unique product heading region; related-product buttons are excluded. Static assets are restricted to observed CDN origins/path without query parameters. Site-owned session refresh is allowed separately; login/OTP/logout and cart/order/payment mutations remain blocked. Refresh allowance is not proof of session longevity.
 

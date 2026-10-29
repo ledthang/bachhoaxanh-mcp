@@ -48,7 +48,9 @@ export async function guardRequest(route, state, mainFrame) {
     }
     if (state.failed || request.frame() !== mainFrame ||
         !allowedRequest(request.url(), request.method(), request.isNavigationRequest(), request.resourceType())) {
-      if (request.isNavigationRequest()) state.failed = true;
+      if (request.isNavigationRequest() ||
+          (new URL(request.url()).origin === API &&
+           new URL(request.url()).pathname === '/gw/Product/GetPopupProduct')) state.failed = true;
       await route.abort();
     } else await route.continue();
   } catch {

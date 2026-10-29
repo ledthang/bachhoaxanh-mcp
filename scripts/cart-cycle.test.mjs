@@ -41,6 +41,18 @@ for (const [url, method, armed, data, expected] of [
   assert.equal(Boolean(state.addValid), expected);
   if (expected) { await guardRequest(route, state, frame); assert.equal(state.failed, true); }
 }
+// Blocking a purchase prerequisite must not look like a valid Add preflight.
+{
+  const state = { failed: false, armed: true, addCount: 0, baseline };
+  let aborted = 0;
+  await guardRequest({ request: () => ({
+    url: () => 'https://api.bachhoaxanh.com/gw/Product/GetPopupProduct?productId=335195',
+    method: () => 'GET', frame: () => frame, isNavigationRequest: () => false,
+    resourceType: () => 'fetch',
+  }), abort: async () => { aborted++; }, continue: async () => assert.fail('unexpected forwarding') }, state, frame);
+  assert.equal(aborted, 1);
+  assert.equal(state.failed, true);
+}
 assert.equal(projectCart({ HttpCode: 200, ResultCode: 0, Value: {
   TotalItemShow: 0, GroupSOStep2InCart: null, CartTotal: { Total: 0 },
   UnknownItems: [{ ProductId: 1 }],
