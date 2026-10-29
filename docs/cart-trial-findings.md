@@ -26,6 +26,13 @@ A bounded, separately approved trial targeted product 335195, quantity 1, initia
 - The visible popup was found via `.list-choose-combo`, showing 5,000 / 6,900 / -28%. `[role="dialog"]` returned no matches and is not a reliable absence test for this site.
 - Allowing the popup read did not establish cart price: all diagnostic Add requests were aborted. The previous 6,900 cart response still has no proven pricing cause. Buy-together eligibility, attachment handling and customer-specific conditions remain open.
 
+## Additional read contracts
+
+- A context-bound product-attachment read returned HTTP 200 with eight optional attached products and `txtPromotion: MUA KÈM TIẾT KIỆM HƠN`. No attachments were selected. This does not prove the main item's discounted price requires an attachment.
+- The website's cart page issued `POST /gw/cart/api/OrderV2/getAfter` following `get`. Its observed envelope had `token`, `us`, `provinceId`, `districtId`, `wardId`, `storeId`, `isNewModel`, `data`; nested data had `cartId`, `infoApp`, `wardId`.
+- A private diagnostic forwarded only this website-generated read after matching cart identity and delivery context against a successful empty `get` response. Both `get` and correlated `getAfter` returned HTTP 200 and passed the empty-cart projection, with no inactive group. No Add, Update, Remove, checkout or payment was forwarded.
+- Blocking `getAfter` means an earlier read was not a complete reproduction of the website's cart refresh flow. Whether this explains the prior price difference remains unverified; an empty-cart read cannot establish nonempty cart pricing.
+
 ## Limits
 
 No quantity-2 update, full restart-persistence cycle with a purchasable line, app synchronization, or completed MCP acceptance. No blind Add retry performed. No order/payment action.
