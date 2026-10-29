@@ -33,9 +33,19 @@ A bounded, separately approved trial targeted product 335195, quantity 1, initia
 - A private diagnostic forwarded only this website-generated read after matching cart identity and delivery context against a successful empty `get` response. Both `get` and correlated `getAfter` returned HTTP 200 and passed the empty-cart projection, with no inactive group. No Add, Update, Remove, checkout or payment was forwarded.
 - Blocking `getAfter` means an earlier read was not a complete reproduction of the website's cart refresh flow. Whether this explains the prior price difference remains unverified; an empty-cart read cannot establish nonempty cart pricing.
 
+## Successful bounded cycles
+
+- A later `--approved-trial` run exited 0 with one Add acknowledged, a fresh target line verified, one exact Remove, and a subsequent empty read. A separate persistent-browser restart verified empty active/inactive collections through `get` and `getAfter`.
+- Add returns an acknowledgement envelope (`Value.CartId`, `Value.Cart`, etc.), not the full `get` cart schema. Full cart verification must use subsequent context-matched reads.
+- A blocked `GET /gw/LocationV3/GetFull` left purchase-hook delivery state undefined although authenticated cart context was valid. Allowing the website-generated, query-free main-frame read restored popup/Add behavior. This is not permission to bypass delivery selection.
+- `--preview-update` observed and aborted an exact Update request, then removed the quantity-1 trial line. Saved schema contains field names only, no account values.
+- `--approved-update-trial` subsequently exited 0: Add quantity 1, exact Update quantity 2, reload with a new read epoch verified quantity 2, exact Remove, empty read. Checkout/payment requests remained blocked.
+- Removal UI needed dismissal of a separate `ĐỒNG Ý` notice and the exact `Xóa` confirmation. A single acknowledgement button was not sufficient in this observed flow.
+- Cart reads observed both 6,900 and 5,000 VND at different times; discounted pricing can change on refresh. Cause remains unresolved. These bounded trials accept a maximum unit price of 6,900, not a guarantee of 5,000.
+
 ## Limits
 
-No quantity-2 update, full restart-persistence cycle with a purchasable line, app synchronization, or completed MCP acceptance. No blind Add retry performed. No order/payment action.
+Quantity-2 update and reload persistence now verified in the bounded cycle. Full browser-restart persistence with a purchasable line, app synchronization, and completed MCP acceptance remain unverified. No blind Add retry performed. No order/payment action.
 
 Trial implementation did not handle price rejection cleanup or inactive groups reliably; it was retired outside the repository, not shipped. Existing abort-only tools remain research diagnostics, not permission to enable mutation.
 

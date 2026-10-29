@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises';
+import { stat, readFile, writeFile } from 'node:fs/promises';
 import { validateRefresh } from './cart-refresh.mjs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -17,7 +17,8 @@ const keys = (x, expected) => x && typeof x === 'object' && !Array.isArray(x) &&
 const id = x => typeof x === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(x);
 const fail = () => { throw Error('TRIAL_STOP'); };
 
-export function trialLine(payload) {
+export function trialLine(payload, expectedQuantity = 1) {
+  if (![1, 2].includes(expectedQuantity)) fail();
   if (payload?.HttpCode !== 200 || payload?.ResultCode !== 0) fail();
   const cart = payload.Value;
   if (!cart || !Number.isSafeInteger(cart.CartTotal?.Total) || cart.CartTotal.Total < 0 || (cart.GroupSOStep2InCart !== null && !Array.isArray(cart.GroupSOStep2InCart))) fail();
@@ -27,7 +28,7 @@ export function trialLine(payload) {
   const lines = groups.flatMap(group => group.ListCartItemBuy);
   if (lines.length !== 1) fail();
   const line = lines[0];
-  if (line.Id !== 335195 || line.QuantityInCart !== 1 || !id(line.GuildId) ||
+  if (line.Id !== 335195 || line.QuantityInCart !== expectedQuantity || !id(line.GuildId) ||
       ![0,1].includes(cart.TotalItemShow) || line.NetUnitValue !== 0 || line.IsGift ||
       [line, ...groups].some(owner => ['ListOfChildProduct', 'ListGift', 'ListAttachProduct'].some(key =>
         owner[key] != null && (!Array.isArray(owner[key]) || owner[key].length)))) fail();
@@ -39,7 +40,29 @@ export function trialLine(payload) {
 }
 
 export function priceAccepted(line) {
-  return Number.isSafeInteger(line.Price) && line.Price > 0 && line.Price <= 6900 && line.Total === line.Price;
+  return [1, 2].includes(line.QuantityInCart) && Number.isSafeInteger(line.Price) && line.Price > 0 && line.Price <= 6900 && line.Total === line.Price * line.QuantityInCart;
+}
+
+export function validateUpdate(raw, baseline, guid, observedKeys = []) {
+  try {
+    if (typeof raw !== 'string' || raw.length > 4096 || !baseline || !id(guid)) return false;
+    const names = [...raw.matchAll(/("(?:[^"\\]|\\.)*")\s*:/g)].map(match => JSON.parse(match[1]));
+    const body = JSON.parse(raw);
+    const required = ['provinceId', 'districtId', 'wardId', 'storeId', 'cartId', 'guid', 'quantity', 'note'];
+    const optional = ['netUnitValue', ...['token', 'us'].filter(key => observedKeys.includes(key))];
+    return names.length === new Set(names).size && keys(body, [...required, ...optional.filter(key => Object.hasOwn(body, key))]) &&
+      ['provinceId', 'districtId', 'wardId', 'storeId'].every(key => Number.isSafeInteger(body[key]) &&
+        (key === 'districtId' ? body[key] >= 0 : body[key] > 0) && body[key] === baseline[key]) &&
+      id(baseline.cartId) && body.cartId === baseline.cartId && body.guid === guid && body.quantity === 2 && body.note === '' &&
+      (!Object.hasOwn(body, 'netUnitValue') || body.netUnitValue === 0) &&
+      ['token', 'us'].every(key => !Object.hasOwn(body, key) || typeof body[key] === 'string');
+  } catch { return false; }
+}
+
+export function updateAllowed(raw, baseline, line, state, observedKeys) {
+  return Boolean(state.addVerified && state.contextUnchanged && !state.unsafe && !state.updateObserved &&
+    !state.removeRequest && line?.Id === 335195 && line.QuantityInCart === 1 &&
+    validateUpdate(raw, baseline, line.GuildId, observedKeys));
 }
 
 export function recordPrice(outcome, line) {
@@ -77,6 +100,7 @@ export function validateRemove(raw, baseline, guid) {
 }
 
 export function classifyResponse(request, state) {
+  if (request === state.updateRequest) return state.removeRequest ? 'ignore' : 'update';
   if (request === state.addRequest) return state.removeRequest ? 'ignore' : 'add';
   if (request === state.removeRequest) return state.removeSucceeded ? 'ignore' : 'remove';
   const read = state.reads.get(request);
@@ -93,8 +117,22 @@ export function cleanupEligible(state) {
 }
 
 export async function main() {
-  if (process.argv.length !== 3 || process.argv[2] !== '--approved-trial' || !process.env.DISPLAY) fail();
+  const args = process.argv.slice(2);
+  const updateMode = ['--approved-update-trial', '--preview-update'].includes(args[0]);
+  const explicitPreview = args.includes('--preview-update');
+  if (!(args.length === 1 && (args[0] === '--approved-trial' || updateMode) ||
+      args.length === 2 && args[0] === '--approved-update-trial' && args[1] === '--preview-update') || !process.env.DISPLAY) fail();
   process.umask(0o077);
+  const schemaPath = resolve('data/cart-update-schema.json');
+  let observedKeys = null;
+  if (updateMode) {
+    try {
+      const saved = JSON.parse(await readFile(schemaPath, 'utf8'));
+      if (saved.endpoint === PREFIX + 'UpdateCartItem' && Array.isArray(saved.keys) &&
+          saved.keys.every(key => typeof key === 'string')) observedKeys = saved.keys;
+    } catch (error) { if (error.code !== 'ENOENT') fail(); }
+  }
+  const previewUpdate = updateMode && (explicitPreview || !observedKeys);
   const directory = resolve(process.env.BHX_PROFILE_DIR || join(homedir(), '.local/share/bhx-mcp/profile'));
   if (!directory.startsWith(homedir() + '/') || !(await stat(join(directory, 'Default'))).isDirectory()) fail();
   const { chromium } = await import('playwright');
@@ -122,6 +160,8 @@ export async function main() {
   const removeExact = async () => {
     if (!cleanupEligible(state)) fail();
     check(cart);
+    const currentLine = trialLine({ HttpCode: 200, ResultCode: 0, Value: cart }, line.QuantityInCart);
+    if (currentLine.GuildId !== line.GuildId) fail();
     const row = page.locator(`div[data-product="335195"][data-code="${line.GuildId}"]`);
     await row.waitFor({ state: 'visible', timeout: 5000 });
     const closeIcon = row.locator('img[alt="close-icon"]');
@@ -165,6 +205,28 @@ export async function main() {
       const q = route.request();
       try {
         const url = q.url();
+        if (url === PREFIX + 'UpdateCartItem' && updateMode) {
+          const raw = q.postData();
+          const candidateKeys = previewUpdate ? Object.keys(JSON.parse(raw)) : observedKeys;
+          const valid = !fatal && armed === 'Update' && q.method() === 'POST' &&
+            q.frame() === page.mainFrame() && !q.isNavigationRequest() && page.url() === ORIGIN + '/gio-hang' &&
+            /^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(q.headers()['content-type'] || '') &&
+            updateAllowed(raw, baseline, line, state, candidateKeys) &&
+            (previewUpdate || keys(JSON.parse(raw), observedKeys));
+          if (!valid) { failed('update_guard'); state.unsafe = true; await route.abort(); return; }
+          check(cart);
+          armed = null; state.updateObserved = true; state.epoch++;
+          if (previewUpdate) {
+            await route.abort();
+            await writeFile(schemaPath, JSON.stringify({ endpoint: url, keys: candidateKeys }) + '\n', { mode: 0o600 });
+            outcome.update_preview_aborted = true;
+          } else {
+            state.updateRequest = q;
+            outcome.update_sent = true;
+            await route.continue();
+          }
+          return;
+        }
         if (url === PREFIX + 'Add' || url === PREFIX + 'Remove') {
           const operation = url.endsWith('/Add') ? 'Add' : 'Remove';
           const valid = (!fatal || (cleaning && operation === 'Remove' && cleanupEligible(state))) && !state.unsafe && armed === operation && q.method() === 'POST' &&
@@ -182,10 +244,14 @@ export async function main() {
           return;
         }
         if (new URL(url).pathname === '/gw/Product/GetPopupProduct') {
+          outcome.popup_observed = true;
           const popup = { failed: false, armed: armed === 'Add' && !addSent && !fatal, baseline };
           await popupGuard(route, popup, page.mainFrame());
           if (popup.failed) { failed('popup_guard'); state.unsafe = true; }
           return;
+        }
+        if (new URL(url).origin === API && new URL(url).pathname === '/gw/LocationV3/GetFull') {
+          if(q.method()==='GET' && !new URL(url).search && q.frame()===page.mainFrame()) {await route.continue();return;}
         }
         if (url === PREFIX + 'getAfter') {
           if (q.frame() !== page.mainFrame() || state.unsafe || q.method() !== 'POST' || q.isNavigationRequest() || !validateRefresh(q.postData(), baseline)) fail();
@@ -196,13 +262,15 @@ export async function main() {
           if (!['provinceId','districtId','wardId','storeId'].every(key => Number.isSafeInteger(body[key]) &&
               (key === 'districtId' ? body[key] >= 0 : body[key] > 0) && (!baseline || body[key] === baseline[key]))) fail();
         }
-        if ((fatal && !cleaning) || state.unsafe || q.frame() !== page.mainFrame() || !allowedRequest(url, q.method(), q.isNavigationRequest(), q.resourceType(), '/gio-hang')) await route.abort();
+        if ((fatal && !cleaning) || state.unsafe || q.frame() !== page.mainFrame() || !allowedRequest(url, q.method(), q.isNavigationRequest(), q.resourceType(), '/gio-hang')) {
+          await route.abort();
+        }
         else await route.continue();
       } catch { failed('request_guard'); state.unsafe = true; await route.abort().catch(() => {}); }
     });
     page.on('response', response => {
       const url = response.url();
-      if (![PROFILE, PREFIX + 'get', PREFIX + 'getAfter', PREFIX + 'Add', PREFIX + 'Remove'].includes(url)) return;
+      if (![PROFILE, PREFIX + 'get', PREFIX + 'getAfter', PREFIX + 'Add', PREFIX + 'Remove', ...(updateMode ? [PREFIX + 'UpdateCartItem'] : [])].includes(url)) return;
       let responsePhase = 'response_transport';
       const task = (async () => {
         const request = response.request();
@@ -235,6 +303,12 @@ export async function main() {
           outcome.add_acknowledged = true;
           return;
         }
+        if (kind === 'update') {
+          responsePhase = 'update_acknowledgement';
+          if (payload?.HttpCode !== 200 || payload?.ResultCode !== 0) fail();
+          state.updateAcknowledged = true;
+          return;
+        }
         if (kind === 'baseline') {
           responsePhase = 'baseline_schema';
           if (baseline) check(next);
@@ -246,7 +320,7 @@ export async function main() {
           check(next);
           responsePhase = kind + '_schema';
           if (kind === 'trial') {
-            const nextLine = trialLine(payload);
+            const nextLine = trialLine(payload, state.updateRequest ? 2 : 1);
             if (line && line.GuildId !== nextLine.GuildId) fail();
             line = nextLine;
             state.line = line;
@@ -254,6 +328,8 @@ export async function main() {
             cart = next;
             state.addVerified = true;
             outcome.add_verified = true;
+            if (state.updateRequest) outcome.update_verified = true;
+            if (state.updateObserved) state.updateReadVerified = true;
           } else if (kind === 'remove') {
             projectCart(payload);
             cart = next;
@@ -299,6 +375,29 @@ export async function main() {
     phase = 'trial_verification';
     await awaitState(() => Boolean(line)); outcome.add_verified = true;
     await drain(); check(cart);
+    if (updateMode) {
+      phase = 'update_ui';
+      await page.goto(ORIGIN + '/gio-hang', { waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(2000);
+      await drain(); check(cart);
+      const row = page.locator(`div[data-product="335195"][data-code="${line.GuildId}"]`);
+      const plus = row.locator('img[alt="plus"]');
+      if (await row.count() !== 1 || await plus.count() !== 1) fail();
+      await page.waitForTimeout(2500);
+      phase = 'update_click';
+      armed = 'Update';
+      await plus.locator('..').dispatchEvent('click');
+      phase = 'update_acknowledgement';
+      await page.waitForTimeout(1500);
+      await awaitState(() => previewUpdate ? outcome.update_preview_aborted : state.updateAcknowledged);
+      phase = 'update_verification';
+      state.epoch++;
+      state.updateReadVerified = false;
+      outcome.update_verified = false;
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
+      await awaitState(() => state.updateReadVerified && (previewUpdate ? state.line?.QuantityInCart === 1 : outcome.update_verified));
+      await drain(); check(cart);
+    }
     phase = 'remove_ui';
     await page.goto(ORIGIN + '/gio-hang', { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2000);
