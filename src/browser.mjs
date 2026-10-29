@@ -30,7 +30,7 @@ export async function readSnapshot(query='cải ngọt', requireProducts=false) 
   const pending=new Set();
   const timer=setTimeout(()=>{fatal=true;void browser?.close().catch(()=>{});},55000);
   try{
-    browser=await chromium.launchPersistentContext(process.env.BHX_PROFILE_DIR||join(homedir(),'.local/share/bhx-mcp/profile'),{headless:process.env.BHX_HEADED!=='1',serviceWorkers:'block',offline:true,timeout:30000,...(process.env.BHX_CHROMIUM_PATH?{executablePath:process.env.BHX_CHROMIUM_PATH}:{})});
+    browser=await chromium.launchPersistentContext(process.env.BHX_PROFILE_DIR||join(process.env.BHX_RUNTIME_DIR||join(homedir(),'.local/share/bhx-mcp'),'profile'),{headless:process.env.BHX_HEADED!=='1',serviceWorkers:'block',offline:true,timeout:30000,...(process.env.BHX_CHROMIUM_PATH?{executablePath:process.env.BHX_CHROMIUM_PATH}:{})});
     const page=await browser.newPage();for(const old of browser.pages())if(old!==page)await old.close();
     await browser.route('**/*',async route=>{
       const q=route.request();let allow=false;
