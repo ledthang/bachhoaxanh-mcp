@@ -41,6 +41,31 @@ for (const [url, method, armed, data, expected] of [
   assert.equal(Boolean(state.addValid), expected);
   if (expected) { await guardRequest(route, state, frame); assert.equal(state.failed, true); }
 }
+// Only the observed, context-bound popup read may precede Add.
+const popup = 'https://api.bachhoaxanh.com/gw/Product/GetPopupProduct?productId=335195&provinceId=3&wardId=4&StoreId=5&PopupProductType=1&quantityInApp=1&isShowPopup=true';
+for (const [url, method, expected] of [[popup, 'GET', true], [popup, 'POST', false],
+  [popup.replace('StoreId=5','StoreId=6'), 'GET', false],
+  [popup+'&extra=1','GET',false], [popup+'&productId=335195','GET',false]]) {
+  const state = { failed:false, armed:true, addCount:0, baseline };
+  let forwarded=0;
+  await guardRequest({ request:()=>({url:()=>url,method:()=>method,frame:()=>frame,
+    isNavigationRequest:()=>false,resourceType:()=> 'fetch'}),
+    abort:async()=>{},continue:async()=>{forwarded++;} },state,frame);
+  assert.equal(forwarded,Number(expected));
+  assert.equal(state.failed,!expected);
+}
+for (const changes of [{ armed:false }, { failed:true }, { baseline:undefined },
+  { requestFrame:{} }, { navigation:true }]) {
+  const state={failed:false,armed:true,addCount:0,baseline,...changes};
+  let aborted=0, forwarded=0;
+  await guardRequest({request:()=>({url:()=>popup,method:()=> 'GET',
+    frame:()=>changes.requestFrame||frame,isNavigationRequest:()=>Boolean(changes.navigation),
+    resourceType:()=> 'fetch'}),abort:async()=>{aborted++;},
+    continue:async()=>{forwarded++;}},state,frame);
+  assert.equal(forwarded,0);
+  assert.equal(aborted,1);
+  assert.equal(state.failed,true);
+}
 // Blocking a purchase prerequisite must not look like a valid Add preflight.
 {
   const state = { failed: false, armed: true, addCount: 0, baseline };

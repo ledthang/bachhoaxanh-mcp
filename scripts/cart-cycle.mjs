@@ -46,6 +46,20 @@ export async function guardRequest(route, state, mainFrame) {
       state.addAborted = true;
       return;
     }
+    const popup = new URL(request.url());
+    if (popup.origin === API && popup.pathname === '/gw/Product/GetPopupProduct') {
+      const q = popup.searchParams;
+      const expected = { productId: '335195', provinceId: String(state.baseline?.provinceId),
+        wardId: String(state.baseline?.wardId), StoreId: String(state.baseline?.storeId),
+        PopupProductType: '1', quantityInApp: '1', isShowPopup: 'true' };
+      const valid = !state.failed && state.armed && state.baseline &&
+        request.frame() === mainFrame && request.method() === 'GET' && !request.isNavigationRequest() &&
+        !popup.username && !popup.password && !popup.hash && q.size === Object.keys(expected).length &&
+        Object.entries(expected).every(([key, value]) => q.getAll(key).length === 1 && q.get(key) === value);
+      if (valid) await route.continue();
+      else { state.failed = true; await route.abort(); }
+      return;
+    }
     if (state.failed || request.frame() !== mainFrame ||
         !allowedRequest(request.url(), request.method(), request.isNavigationRequest(), request.resourceType())) {
       if (request.isNavigationRequest() ||
