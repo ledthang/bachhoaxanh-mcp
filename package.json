@@ -4,7 +4,18 @@
   "private": true,
   "type": "module",
   "description": "Authenticated BHX MCP stdio server with guarded cart mutations; live generalized acceptance pending",
-  "engines": { "node": ">=22" },
-  "scripts": { "start": "node src/server.mjs", "test": "node scripts/mcp.test.mjs && node scripts/auth.test.mjs && node scripts/delivery.test.mjs && node scripts/failure-paths.test.mjs && node scripts/product.test.mjs && node scripts/profile.test.mjs && node scripts/catalog-poc.test.mjs && node scripts/cart-poc.test.mjs && node scripts/cart-cycle.test.mjs && node scripts/cart-refresh.test.mjs && node scripts/cart-trial.test.mjs && node scripts/cart-mutations.test.mjs && python3 -B scripts/cart-cycle-run.test.py", "login": "node scripts/login.mjs", "evidence": "python3 scripts/evidence-run.py", "cart-live": "python3 scripts/cart-cycle-run.py" },
-  "dependencies": { "playwright": "1.64.1" }
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node scripts/mcp.test.mjs && node scripts/session.test.mjs && node scripts/auth.test.mjs",
+    "login": "node scripts/login.mjs",
+    "evidence": "python3 scripts/evidence-run.py",
+    "cart-live": "python3 scripts/cart-cycle-run.py",
+    "mcp-live": "python3 scripts/mcp-read-check.py"
+  },
+  "dependencies": {
+    "playwright": "1.64.1"
+  }
 }

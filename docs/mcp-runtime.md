@@ -1,28 +1,45 @@
-# MCP runtime: guarded cart scope
+# BHX MCP stdio server - ONE lazy live browser session parked on /gio-hang, one shared request guard.
 
-Run `npm start` with Node >=22. MCP uses newline-delimited JSON-RPC over stdio; stdout contains protocol messages only. Private browser/session files stay outside Git under `$BHX_RUNTIME_DIR/profile` (default `~/.local/share/bhx-mcp/profile`).
+The session is the trust boundary. Every call goes through `request()`, which allows only
+the exact URLs the BHX SPA itself calls, from the parked cart page, and records every
+request the page makes (`observed`). Anything a tool sends that was not already observed
+from the page itself is aborted (`POLICY_BLOCKED`), so a tool cannot invent a call.
+Auth is derived from live responses, never assumed: `code 99` / `401` => `REQUIRES_LOGIN`.
+Cart context (cartId + delivery context) is taken from the page's own localStorage, which
+the SPA writes after `OrderV2/get` - the same source the SPA reads from.
 
-Tools cover authenticated reads, product search/detail and cart Add/Update/Remove. No checkout or payment tool exists. Mutation routing permits only exact `Add`, `UpdateCartItem`, `Remove`, cart reads and observed authenticated product reads; unknown requests fail closed.
-
-## Mutation gates
-
-- Every mutation requires exact arguments and explicit `user_authorized:true`.
-- Product IDs, quantities and unit-price ceilings must be positive safe integers.
-- Add requires a recent authenticated search observation in the same MCP process, fresh exact product/detail route, observed variant/scenario/context, purchase-enabled prices within the caller ceiling, and no existing cart line for that product ID.
-- Update and Remove require an exact process-local ownership handle. Multiple runtime-owned lines are supported in one process; restart loses handles.
-- Every write captures a fresh before-cart, guards exact operation/body/route/context/product/line/quantity, then verifies only the intended transition. All unrelated active/inactive lines, totals, identity, price and context must remain consistent.
-- Complex/duplicate/unknown cart shapes, concurrent changes, ambiguous responses and uncertain outcomes stop the session. No automatic retry or cleanup.
-
-## Verification status
-
-Offline regression tests cover generalized quantities/products, exact request rejection, preexisting-line preservation, two runtime-owned lines, exact cleanup, concurrent-change rejection, and acceptance-driver stop behavior. Earlier live evidence covered only product `335195`, Add 1, Update 2, Remove in an empty cart; it does **not** prove generalized live support.
-
-Generalized two-product preservation was pending at the time of writing; it is now **verified live** on 2026-10-30 — see `docs/cart-acceptance.md` (add 299256 → add 299257 → update 299257 qty 2 with 299256 untouched → remove 299257 → remove 299256 → empty baseline restored). Authorized operator command:
-
-```sh
-npm run cart-live -- --authorize-live-cart-trial
+```
+src/server.mjs    JSON-RPC over stdio; tool surface; maps tool args -> session calls
+src/session.mjs   the live page: launch/park, allow-list, request(), cart + auth + addresses
+src/profile.mjs   single source of truth for the persistent profile directory
+src/auth.mjs      detached OTP relay (bhx_login_start / bhx_login_submit)
+scripts/          probes + acceptance tests (stdio-level, run against the real server)
 ```
 
-Driver records raw RPC/stderr evidence under gitignored private `data/cart-preservation-*`, prints sanitized summaries, never touches baseline product IDs, and stops with cleanup-required diagnostics on ambiguity. It never calls checkout/payment routes and never retries or cleans blindly.
+## Cart ownership model (why some calls need `user_authorized`)
 
-Do not call this production-ready. Address mutation with nonempty carts, promotion selection, quantity-specific inventory, mobile-app synchronization and broader acceptance remain unverified.
+BHX carts can hold lines that were added by the shopper outside this integration. Those
+lines are **preservation targets**: this integration must never remove them by accident.
+
+- `bhx_add_to_cart` adds exactly one line and verifies it appears with the requested
+  quantity and a price at or below the caller's ceiling.
+- `bhx_update_cart_item` / `bhx_remove_cart_item` address a line by `line_id`. The tool
+  refuses unknown `line_id` (`LINE_NOT_FOUND`). Touching a line that this process did not
+  create requires `user_authorized: true` (`AUTHORIZATION_REQUIRED`) - an explicit,
+  per-call acknowledgement that the caller means it.
+- `bhx_check_availability` runs a bounded add -> verify -> remove -> verify trial per SKU
+  and leaves the cart as it found it.
+- `bhx_checkout_preview` reads /thanh-toan text only; `Đặt hàng` is never clicked, so no
+  payment can be initiated by this server.
+
+## Session lifecycle
+
+`ensureParked()` on first use; the page stays on /gio-hang between calls (no reload per
+call - reloading is what previously produced `code 99` and mis-attributed cart state).
+On reload, only cart navigation is allowed; other URLs are aborted so a stray subresource
+cannot re-trigger a write.
+
+## Known limits
+
+Stock is never proven by search appearance; `can_buy` is a flag. Prices are
+catalog-observed, payable only after the cart/checkout read that produced them.
