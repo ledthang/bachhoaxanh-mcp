@@ -1,6 +1,9 @@
 # Phase 0 feasibility — 2026-10-28
 
-Status: INCOMPLETE. Gates A and B NOT PASSED. No production MCP or cart adapter implemented.
+Status: **revised 2026-10-30**. The MCP stdio server and guarded cart adapter ARE
+implemented, registered in Hermes (`mcp_servers.bhx`) and exercised live; the original
+"not implemented" line below is the 2026-10-28 baseline, kept for traceability.
+Remaining open gates are listed in [acceptance ledger](phase-acceptance.md).
 
 Update after user login: authenticated profile succeeds after browser/process restart; the account has **two** saved addresses (re-checked 2026-10-30 via `bhx_list_addresses`; the earlier "one saved address" note is obsolete — a second entry, `110346409` / 205 Trần Phú / ward 101469, now exists and cross-address switching was verified with it); selected delivery state persists; website cart read succeeds with 0 items and observed context storeId [selected-store]. See [authenticated observations](authenticated-observations.md) and [address acceptance](address-acceptance.md). Earlier pending-login statements below describe initial baseline, not latest state.
 
