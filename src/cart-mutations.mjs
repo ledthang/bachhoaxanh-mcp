@@ -62,7 +62,7 @@ export function verifyTransition(before, after, intent) {
   if (targets.length !== (removing ? 0 : 1)) fail();
   const nextTarget = targets[0];
   if (nextTarget && (nextTarget.Id !== intent.productId || nextTarget.QuantityInCart !== intent.quantity || !positive(nextTarget.Price) || nextTarget.Price > intent.ceiling || nextTarget.Total !== nextTarget.Price * intent.quantity || !Number.isSafeInteger(nextTarget.Total) || nextTarget.IsGift || nextTarget.NetUnitValue !== 0)) fail();
-  if (oldTarget && nextTarget && (oldTarget.Price !== nextTarget.Price || oldTarget.Id !== nextTarget.Id || ['ProductType', 'Type', 'Scenario', 'NetUnitValue', 'Note'].some(key => !isDeepStrictEqual(oldTarget[key], nextTarget[key])))) fail();
+  if (oldTarget && nextTarget && (oldTarget.Price !== nextTarget.Price || oldTarget.Id !== nextTarget.Id || ['TypeProduct', 'ChildType', 'IsCombo', 'MainProductRefId', 'NetUnitValue', 'Note'].some(key => !isDeepStrictEqual(oldTarget[key], nextTarget[key])))) fail();
   const untouched = oldLines.filter(line => line !== oldTarget);
   if (!isDeepStrictEqual(sorted(untouched), sorted(nextLines.filter(line => line !== nextTarget)))) fail();
   const oldPublic = projectCartRead(payload(before)).items.filter(line => adding || line.line_id !== intent.guid);

@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const context = { provinceId: 3, districtId: 0, wardId: 4, storeId: 5, cartId: 'test-cart' };
-const line = (product, guid, quantity = 1) => ({ Id: product, GuildId: guid, Name: 'Test', QuantityInCart: quantity, Price: 4000, Total: quantity * 4000, NetUnitValue: 0 });
+const line = (product, guid, quantity = 1) => ({ Id: product, GuildId: guid, Name: 'Test', QuantityInCart: quantity, Price: 4000, Total: quantity * 4000, NetUnitValue: 0, Note: '', TypeProduct: 0, ChildType: -1, IsCombo: false, MainProductRefId: 0 });
 const cart = lines => ({ CartId: context.cartId, TotalItemShow: lines.length, GroupSOStep2InCart: [{ ListCartItemBuy: lines }], CartTotal: { Total: lines.reduce((total, item) => total + item.Total, 0) } });
 const baseline = line(10, 'baseline'), first = line(20, 'first'), second = line(30, 'second');
 for (const quantity of [1, 2, 7, Number.MAX_SAFE_INTEGER]) {
