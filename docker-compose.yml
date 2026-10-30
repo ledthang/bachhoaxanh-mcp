@@ -1,0 +1,37 @@
+# BHX MCP runs as an MCP **stdio** server: the MCP client (Hermes) spawns
+# `node src/server.mjs` over stdin/stdout. It opens no HTTP port. A container
+# that only launches the process is pointless — the client lives on the host.
+#
+# Two deployment modes exist; pick ONE:
+#
+# A) Hermes-native (current, verified): Hermes config `mcp_servers.bhx` points
+#    at the host checkout (see docs/hermes-integration.md). No compose needed.
+#
+# B) Compose service (this file): for running BHX MCP under a supervisor with
+#    persistent profile + health-check, when a non-Hermes stdio client or an
+#    operator console needs it. Health-check proves the stdio server answers
+#    `initialize` (there is no HTTP readiness to poll).
+services:
+  bhx-mcp:
+    build: .
+    image: bhx-mcp:local
+    container_name: bhx-mcp
+    restart: unless-stopped
+    environment:
+      # Playwright + Chromium live inside the image; profile persists on a volume.
+      BHX_RUNTIME_DIR: /runtime
+      # No secrets in compose: login is interactive (noVNC/headless), see docs/deployment.md.
+    volumes:
+      - bhx-runtime:/runtime
+    # stdio MCP: no exposed ports. Keep to localhost/private when a client attaches.
+    healthcheck:
+      # Prove the server speaks MCP: send initialize + tools/list over stdio, expect 13 tools,
+      # no checkout/payment. CMD form runs node directly (entrypoint is the server itself).
+      test: ["CMD", "node", "scripts/healthcheck.cjs"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  bhx-runtime:
