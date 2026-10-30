@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
-import {projectProduct,quantityAvailability} from '../src/product.mjs';
+import {projectProduct,quantityAvailability,validateLookup,detailRequestAllowed,catalogContract} from '../src/product.mjs';
 const fixture={data:{id:335195,boxBuys:[{id:335195,type:1,scenario:0,productPrices:[{price:5000,sysPrice:6900,isCanBuy:true,quantity:200}]}]}};
 const p=projectProduct(fixture,335195);
+const campaignContract=catalogContract({id:1,name:'Sữa hộp 1.000ml',unit:'hộp',prices:[{price:12340.7407407407,list_price:14000,can_buy:true}],display_price:11921,promotion:{status:'active',remaining_quantity:650,maximum_quantity:10},price_status:'display-only-cart-payable-unverified'});
+assert.equal(campaignContract.display_price,11921);
+assert.equal(campaignContract.prices[0].price_vnd,12340.7407407407);
+assert.equal(campaignContract.price_status,'display-only-cart-payable-unverified');
+assert.equal(campaignContract.availability,'unknown');
+assert.equal(campaignContract.stock_quantity,null);
+assert.equal(campaignContract.maximum_quantity,null);
+assert.equal(campaignContract.package_size.normalized,null);
 assert.equal(p.stock_quantity,null);assert.equal(quantityAvailability(p,2).status,'unknown');
 assert.equal(p.availability,'unknown');
 assert.throws(()=>projectProduct({data:{id:335195,boxBuys:[{id:335195,productPrices:[null]}]}},335195),/BHX_PRODUCT_UNVERIFIED/);
@@ -14,3 +22,38 @@ const h=createHandler({snapshotReader:async()=>{reads++;throw Error('not read');
 await h.handle({jsonrpc:'2.0',id:1,method:'initialize'});
 for(const args of [{items:[]},{items:[{product_id:335195,quantity:0}]},{items:[{product_id:1,quantity:2}]},{items:[{product_id:335195,quantity:2,url:'https://invalid'}]}])await assert.rejects(()=>h.handle({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'bhx_check_availability',arguments:args}}),e=>e.code===-32602);
 assert.equal(reads,0);console.log('PASS: product projection fail-closed, quantity not inventory, invalid args no browser.');
+for(const id of [1,76888,235865]){
+ validateLookup('sữa tươi',id);
+ const result={id,path:'/sua-tuoi/sua-hop',name:'Lốc 4 hộp sữa 180ml',unit:'Lốc',prices:[{price:42000,list_price:45000,can_buy:true}]};
+ const context={provinceId:1,wardId:2,storeId:3,districtId:0};
+ const url=`https://api.bachhoaxanh.com/gw/Product/GetProductDetail?productId=${id}&provinceId=1&wardId=2&storeId=3`;
+ assert.equal(detailRequestAllowed(url,'GET',result,context),true);
+ for(const bad of [url+'&productId=1',url.replace('storeId=3','storeId=4'),url.replace('https:','http:'),url+'&extra=1'])assert.equal(detailRequestAllowed(bad,'GET',result,context),false);
+ assert.equal(detailRequestAllowed(url,'POST',result,context),false);
+ assert.equal(detailRequestAllowed(url,'GET',{...result,path:'//evil.test/path'},context),false);
+ const contract=catalogContract(result);
+ assert.equal(contract.package_size.pack_count,4);assert.equal(contract.package_size.normalized.amount,180);
+ assert.equal(contract.availability,'unknown');assert.equal(contract.promotion.status,'unknown');
+ assert.equal(catalogContract({...result,prices:[{can_buy:false}]}).availability,'unavailable');
+ assert.equal(quantityAvailability({...contract,availability:'unavailable'},200).status,'unavailable');
+ const generic=projectProduct({data:{id,boxBuys:[{id,productPrices:[{price:10.5,sysPrice:12,isCanBuy:false,quantity:200}]}]}},id);
+ assert.equal(generic.availability,'unavailable');assert.equal(generic.stock_quantity,null);
+}
+for(const id of [0,-1,1.5,'1',null,Number.MAX_SAFE_INTEGER+1])if(id!==null)assert.throws(()=>validateLookup('sữa',id));
+for(const query of ['', ' ', '\n', 'x'.repeat(101)])assert.throws(()=>validateLookup(query,1));
+for(const name of ['Túi cá hồi 500g - 700g','Sữa hộp 1.000ml']){
+ const pack=catalogContract({id:1,name,unit:'Túi',prices:[{price:1,list_price:1,can_buy:true}]}).package_size;
+ assert.equal(pack.normalized,null);
+}
+console.log('PASS: generic IDs, observed route guard, context mismatch, pack labels, unavailable versus unknown.');
+let lookup;
+const genericHandler=createHandler({snapshotReader:async(...args)=>{lookup=args;return {product:{product_id:76888,availability:'unknown'},context:{verified:true},observed_at:'test'};}});
+await genericHandler.handle({jsonrpc:'2.0',id:1,method:'initialize'});
+const response=await genericHandler.handle({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'bhx_get_product',arguments:{query:'sữa tươi',product_id:76888}}});
+assert.deepEqual(lookup,['sữa tươi',false,76888]);assert.equal(JSON.parse(response.content[0].text).product_id,76888);
+const unavailable=await genericHandler.handle({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'bhx_check_availability',arguments:{query:'sữa tươi',items:[{product_id:76888,quantity:200}]}}});
+assert.equal(JSON.parse(unavailable.content[0].text).items[0].status,'unknown');
+const broken=createHandler({snapshotReader:async()=>{throw Error('PRIVATE_TOKEN_AND_ADDRESS');}});
+await broken.handle({jsonrpc:'2.0',id:1,method:'initialize'});
+const error=await broken.handle({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'bhx_get_product',arguments:{query:'sữa',product_id:76888}}});
+assert.equal(error.isError,true);assert.doesNotMatch(JSON.stringify(error),/PRIVATE_TOKEN_AND_ADDRESS/);

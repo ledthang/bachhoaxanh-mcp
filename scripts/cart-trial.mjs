@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
+import { profileDirectory } from '../src/profile.mjs';
 import { allowedRequest, projectCart, contextSnapshot, productUI } from './cart-poc.mjs';
 import { validateAdd, guardRequest as popupGuard } from './cart-cycle.mjs';
 
@@ -134,7 +135,7 @@ export async function main() {
     } catch (error) { if (error.code !== 'ENOENT') fail(); }
   }
   const previewUpdate = updateMode && (explicitPreview || !observedKeys);
-  const directory = resolve(process.env.BHX_PROFILE_DIR || join(homedir(), '.local/share/bhx-mcp/profile'));
+  const directory = profileDirectory();
   if (!directory.startsWith(homedir() + '/') || !(await stat(join(directory, 'Default'))).isDirectory()) fail();
   const { chromium } = await import('playwright');
   let browser, page, profile, delivery, cart, baseline, snapshot, line, armed;

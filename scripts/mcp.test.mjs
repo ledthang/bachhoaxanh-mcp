@@ -4,7 +4,7 @@ import {projectCartRead} from '../src/browser.mjs';
 const messages=[{jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2024-11-05'}},{jsonrpc:'2.0',id:2,method:'tools/list'},{jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'bhx_get_cart',arguments:{url:'https://invalid'}}}];
 const run=spawnSync(process.execPath,['src/server.mjs'],{input:messages.map(JSON.stringify).join('\n')+'\n',encoding:'utf8',timeout:10000});
 assert.equal(run.status,0);const replies=run.stdout.trim().split('\n').map(JSON.parse);
-assert.equal(replies[0].result.serverInfo.name,'bhx-mcp');assert.equal(replies[1].result.tools.length,11);assert.equal(replies[2].error.code,-32602);
+assert.equal(replies[0].result.serverInfo.name,'bhx-mcp');assert.equal(replies[1].result.tools.length,13);assert.equal(replies[2].error.code,-32602);
 const fixture={HttpCode:200,ResultCode:0,Value:{TotalItemShow:0,GroupSOStep2InCart:null,CartTotal:{Total:0}}};
 assert.deepEqual(projectCartRead(fixture).items,[]);assert.throws(()=>projectCartRead({}));
 const {createHandler}=await import('../src/server.mjs');

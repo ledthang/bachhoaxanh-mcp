@@ -1,11 +1,10 @@
 import { chromium } from 'playwright';
 import { mkdir, chmod } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { profileDirectory } from '../src/profile.mjs';
 
 process.umask(0o077);
 if (!process.env.DISPLAY) throw new Error('DISPLAY required: use a local desktop or secured research display.');
-const profile = resolve(process.env.BHX_PROFILE_DIR || join(homedir(), '.local/share/bhx-mcp/profile'));
+const profile = profileDirectory();
 await mkdir(profile, { recursive: true, mode: 0o700 });
 await chmod(profile, 0o700);
 const context = await chromium.launchPersistentContext(profile, {

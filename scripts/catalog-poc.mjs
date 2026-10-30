@@ -1,6 +1,6 @@
 import { mkdir, chmod } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
+import { profileDirectory } from '../src/profile.mjs';
 import { pathToFileURL } from 'node:url';
 
 export const QUERIES = Object.freeze(['ức gà', 'thịt heo', 'cá hồi', 'cải ngọt', 'sữa tươi']);
@@ -34,9 +34,41 @@ const amount = value => typeof value === 'number' && Number.isFinite(value) && v
 const productPath = value => typeof value === 'string' && value.length <= 300 &&
   /^\/[a-z0-9-]+(?:\/[a-z0-9-]+)+$/.test(value);
 
-export function projectProducts(payload) {
+function campaignProjection(product, now) {
+  if (product.isSpecialOffer != null && product.isSpecialOffer !== false) fail('PRODUCTS_SCHEMA_INVALID');
+  if (product.specialOfferInfo != null || product.campaignInfoFS != null || product.activeFS ||
+      product.isComingSoonFS || product.isBoxFS || product.isBoxSO) fail('PRODUCTS_SCHEMA_INVALID');
+  if (product.scenario != null && product.scenario !== 0 && product.scenario !== 1) fail('PRODUCTS_SCHEMA_INVALID');
+  const campaigns = product.lstCampaingInfo;
+  if (campaigns == null) {
+    if (product.scenario === 1) fail('PRODUCTS_SCHEMA_INVALID');
+    return {};
+  }
+  if (!Array.isArray(campaigns) || campaigns.length > 1) fail('PRODUCTS_SCHEMA_INVALID');
+  if (!campaigns.length && product.scenario !== 1) return {};
+  if (product.scenario !== 1 || campaigns.length !== 1 || product.productPrices.length !== 1) return { price_status:'campaign-selection-unverified', promotion:{status:'unknown'} };
+  const campaign = campaigns[0];
+  const timestamp = value => typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value));
+  const instant = now instanceof Date ? now.getTime() : typeof now === 'number' ? now : timestamp(now) ? Date.parse(now) : NaN;
+  const price = campaign?.productPrice;
+  if (!Number.isFinite(instant) || !timestamp(campaign?.startTime) || !timestamp(campaign?.dueTime) ||
+      Date.parse(campaign.startTime) >= Date.parse(campaign.dueTime) ||
+      !Number.isSafeInteger(campaign.remainingQuantity) || campaign.remainingQuantity < 0 ||
+      !Number.isSafeInteger(campaign.maxQuantityOrder) || campaign.maxQuantityOrder < 1 ||
+      !amount(price?.price) || !amount(price?.sysPrice) || price.price > price.sysPrice ||
+      typeof price?.isCanBuy !== 'boolean') fail('PRODUCTS_SCHEMA_INVALID');
+  const active = instant >= Date.parse(campaign.startTime) && instant <= Date.parse(campaign.dueTime) && campaign.remainingQuantity > 0;
+  return { display_price: Math.round(active ? price.price : product.productPrices[0].price),
+    price_status: 'display-only-cart-payable-unverified',
+    promotion: { status: active ? 'active' : 'inactive', start_time: campaign.startTime,
+      due_time: campaign.dueTime, remaining_quantity: campaign.remainingQuantity,
+      maximum_quantity: campaign.maxQuantityOrder } };
+}
+
+export function projectProducts(payload, { now = Date.now() } = {}) {
   const products = payload?.data?.products;
-  if (!Array.isArray(products) || !products.length) fail('PRODUCTS_SCHEMA_INVALID');
+  if (!Array.isArray(products)) fail('PRODUCTS_SCHEMA_INVALID');
   const projected = products.map(product => {
     const name = product?.fullName || product?.name;
     if (!validId(product?.id) || !text(name) || !text(product?.unit) || !productPath(product?.url) ||
@@ -47,9 +79,10 @@ export function projectProducts(payload) {
       }
       return { price: price.price, list_price: price.sysPrice, can_buy: price.isCanBuy };
     });
-    return { id: Number(product.id), name, path: product.url, unit: product.unit, prices };
+    return { id: Number(product.id), name, path: product.url, unit: product.unit, prices,
+      ...(() => { try { return campaignProjection(product, now); } catch { return {price_status:'campaign-selection-unverified',promotion:{status:'unknown'}}; } })() };
   });
-  return projected.slice(0, 3);
+  return projected;
 }
 
 function searchPage(value, query) {
@@ -91,13 +124,13 @@ async function compareCard(page, product) {
       .map(token => Number(token.replace(/\D/g, '')));
     return {
       exact_product_path_match: true,
-      api_price_token_match: prices.some(price => tokens.includes(price.price)),
-      api_list_price_token_match: prices.some(price => tokens.includes(price.list_price)),
+      api_price_token_match: prices.some(price => tokens.includes(Math.round(price.price))),
+      api_list_price_token_match: prices.some(price => tokens.includes(Math.round(price.list_price))),
       purchase_control_present: [...card.querySelectorAll('button')].some(button =>
         /^(mua|chọn mua|thêm vào giỏ)$/i.test(button.textContent.trim()) && !button.disabled),
       promotion_present: /khuyến mãi|mua .*tặng|giảm|suất|tối đa/i.test(content),
     };
-  }, product.prices);
+  }, product.display_price == null ? product.prices : [{ price: product.display_price, list_price: product.prices[0].list_price }]);
 }
 
 export function queryCapture(page, query, baseline, pending) {
@@ -238,7 +271,7 @@ async function main() {
   try {
     if (!process.env.DISPLAY) fail('DISPLAY_REQUIRED');
     const { chromium } = await import('playwright');
-    const profile = resolve(process.env.BHX_PROFILE_DIR || join(homedir(), '.local/share/bhx-mcp/profile'));
+    const profile = profileDirectory();
     await mkdir(profile, { recursive: true, mode: 0o700 });
     await chmod(profile, 0o700);
     stage = 'LAUNCH_FAILED';

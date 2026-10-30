@@ -1,5 +1,5 @@
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
+import { profileDirectory } from '../src/profile.mjs';
 import { pathToFileURL } from 'node:url';
 import { allowedRequest, projectCart, contextSnapshot, productUI } from './cart-poc.mjs';
 
@@ -96,8 +96,7 @@ export async function main() {
   try {
     if (!process.env.DISPLAY || process.argv.length !== 2) stop();
     const { chromium } = await import('playwright');
-    browser = await chromium.launchPersistentContext(resolve(process.env.BHX_PROFILE_DIR ||
-      join(homedir(), '.local/share/bhx-mcp/profile')), {
+    browser = await chromium.launchPersistentContext(profileDirectory(), {
       headless: false, serviceWorkers: 'block', timeout: 30000,
       ...(process.env.BHX_CHROMIUM_PATH ? { executablePath: process.env.BHX_CHROMIUM_PATH } : {}),
     });

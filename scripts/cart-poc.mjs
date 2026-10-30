@@ -1,6 +1,6 @@
 import { mkdir, chmod, open } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
+import { profileDirectory } from '../src/profile.mjs';
 import { pathToFileURL } from 'node:url';
 import { validateRefresh } from './cart-refresh.mjs';
 import { matchContext } from './catalog-poc.mjs';
@@ -209,7 +209,7 @@ async function main() {
   process.once('SIGTERM', signal);
   try {
     if (!process.env.DISPLAY || process.argv.length !== 2) fail('HEADED_DISCOVERY_ONLY');
-    const directory = resolve(process.env.BHX_PROFILE_DIR || join(homedir(), '.local/share/bhx-mcp/profile'));
+    const directory = profileDirectory();
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await chmod(directory, 0o700);
     const { chromium } = await import('playwright');

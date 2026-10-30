@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { validateAddressInput, selectionAllowed } from '../src/delivery.mjs';
+for(const input of [null,{},[],{address_id:1},{address_id:'01'},{address_id:'1',extra:true},{address_id:'1\n'}])assert.throws(()=>validateAddressInput(input));
+assert.equal(validateAddressInput({address_id:'12'}),'12');
+assert.equal(selectionAllowed('https://api.bachhoaxanh.com/gw/cart/api/OrderV2/SelectProfile','POST',{},null),false);
+assert.equal(selectionAllowed('https://api.bachhoaxanh.com/gw/cart/api/OrderV2/Add','POST',{},{}),false);
+const baseline={cartId:'cart',provinceId:1,districtId:0,wardId:2,storeId:3,address:{addressId:12,provinceId:1,wardId:2,lat:'10',lng:'106'}};
+baseline.address.districtId=4;
+const body={data:{CartId:'cart',Lat:10,Lng:106,ProfileDetailId:12,ProfileDetailIds:[],wardId:2},provinceId:1,districtId:4,wardId:2,storeId:3,isNewModel:true}; assert.equal(selectionAllowed('https://api.bachhoaxanh.com/gw/cart/api/OrderV2/SelectProfile','POST',body,baseline),true);
+const url='https://api.bachhoaxanh.com/gw/cart/api/OrderV2/SelectProfile';
+assert.equal(selectionAllowed(url,'POST',body,baseline),true);
+for(const bad of [{...body,isSubmitOrder:true},{...body,data:{...body.data,ProfileDetailId:13}},{...body,storeId:4},{...body,data:{...body.data,ProfileDetailIds:[12]}}])assert.equal(selectionAllowed(url,'POST',bad,baseline),false);
+const {selectAddress}=await import('../src/delivery.mjs');
+const fixture={authenticated:true,requires_login:false,addresses:[{id:'12',selected:true}],context:{address_id:'12',province_id:'1',ward_id:'2',store_id:'3',verified:true},cart:{items:[]}};
+let writes=0;
+const result=await selectAddress({address_id:'12'},async()=>structuredClone(fixture),async()=>{writes++;});
+assert.equal(writes,1);assert.equal(result.selection_status,'selected-and-restarted');
+console.log('PASS: delivery input and exact observed selection guard');

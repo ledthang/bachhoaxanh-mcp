@@ -1,337 +1,302 @@
 import { stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { profileDirectory } from './profile.mjs';
 import { projectCartRead } from './browser.mjs';
-import { allowedRequest, projectCart, contextSnapshot, productUI } from '../scripts/cart-poc.mjs';
-import { validateAdd, guardRequest as popupGuard } from '../scripts/cart-cycle.mjs';
+import { projectProduct, detailRequestAllowed } from './product.mjs';
+import { allowedRequest, contextSnapshot } from '../scripts/cart-poc.mjs';
+import { projectProducts, matchContext } from '../scripts/catalog-poc.mjs';
 import { validateRefresh } from '../scripts/cart-refresh.mjs';
-import { trialLine, priceAccepted, acknowledgeAdd, drainPending, validateRemove, updateAllowed, classifyResponse, cleanupEligible } from '../scripts/cart-trial.mjs';
-const ORIGIN = 'https://www.bachhoaxanh.com';
+
+const SITE = 'https://www.bachhoaxanh.com';
 const API = 'https://api.bachhoaxanh.com';
 const PREFIX = API + '/gw/cart/api/OrderV2/';
 const PROFILE = API + '/gw/bhx-api-identity/api/v1/profile/full-profile';
-const PRODUCT = ORIGIN + '/rau-sach/cai-ngot-tui-400gr';
-const id = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(value);
-const keys = (value, expected) => value && Object.keys(value).length === expected.length && expected.every(key => Object.hasOwn(value, key));
+const SEARCH = API + '/gw/search/v2/DataSearch';
+const CONTEXT = ['provinceId', 'districtId', 'wardId', 'storeId'];
+const positive = value => Number.isSafeInteger(value) && value > 0;
+const identity = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(value);
 const fail = () => { throw Error('BHX_MUTATION_UNVERIFIED'); };
+const payload = value => ({ HttpCode: 200, ResultCode: 0, Value: value });
+const exact = (value, fields) => value && !Array.isArray(value) && Object.keys(value).length === fields.length && fields.every(key => Object.hasOwn(value, key));
+
 export function validateMutation(name, args) {
   const fields = name === 'bhx_add_to_cart' ? ['product_id', 'quantity', 'max_unit_price_vnd', 'user_authorized'] : name === 'bhx_update_cart_item' ? ['line_id', 'quantity', 'user_authorized'] : name === 'bhx_remove_cart_item' ? ['line_id', 'user_authorized'] : null;
-  if (!fields || !args || typeof args !== 'object' || Array.isArray(args) || !keys(args, fields) || args.user_authorized !== true) throw Error('Explicit user_authorized:true and exact arguments required');
-  if (name === 'bhx_add_to_cart') {
-    if (args.product_id !== 335195 || args.quantity !== 1 || !Number.isSafeInteger(args.max_unit_price_vnd) || args.max_unit_price_vnd < 1) throw Error('UNVERIFIED_SCOPE: only product 335195, variant 1, scenario 0, quantity 1');
-  } else if (!id(args.line_id) || (name === 'bhx_update_cart_item' && args.quantity !== 2)) throw Error('UNVERIFIED_SCOPE: runtime-owned line only; update quantity 1 to 2 only');
+  if (!fields || !exact(args, fields) || args.user_authorized !== true) throw Error('Explicit user_authorized:true and exact arguments required');
+  if (name === 'bhx_add_to_cart' ? !positive(args.product_id) || !positive(args.quantity) || !positive(args.max_unit_price_vnd) : !identity(args.line_id) || name === 'bhx_update_cart_item' && !positive(args.quantity)) throw Error('Positive safe integer IDs, quantities and price ceiling required; runtime-owned line only');
 }
-export async function createCartSession({browserType, profileDirectory} = {}) {
-  const directory = resolve(profileDirectory || process.env.BHX_PROFILE_DIR || join(process.env.BHX_RUNTIME_DIR || join(homedir(), '.local/share/bhx-mcp'), 'profile'));
+
+export function cartLines(cart) {
+  projectCartRead(payload(cart));
+  if (!identity(cart.CartId)) fail();
+  const groups = [...(cart.GroupSOStep2InCart || []), ...(cart.GroupCartOff == null ? [] : [cart.GroupCartOff])];
+  const lines = groups.flatMap(group => group.ListCartItemBuy);
+  if (new Set(lines.map(line => line.GuildId)).size !== lines.length || lines.some(line => !identity(line.GuildId))) fail();
+  const visit = (node, depth = 0) => {
+    if (depth > 20) fail();
+    if (!node || typeof node !== 'object') return;
+    for (const [key, value] of Object.entries(node)) {
+      if (['Items', 'Products', 'CartItems', 'OrderItems', 'OrderDetails', 'ProductList', 'ListProduct', 'Lines', 'ListOfChildProduct', 'ListGift', 'ListAttachProduct'].includes(key) && value != null && (!Array.isArray(value) || value.length)) fail();
+      if (key === 'ListCartItemBuy' && !groups.includes(node)) fail();
+      visit(value, depth + 1);
+    }
+  };
+  visit(cart);
+  return lines;
+}
+
+const sorted = lines => [...lines].sort((left, right) => left.GuildId.localeCompare(right.GuildId));
+function sameCart(before, after) {
+  if (before.CartId !== after.CartId || before.CartTotal.Total !== after.CartTotal.Total || !isDeepStrictEqual(sorted(cartLines(before)), sorted(cartLines(after))) || !isDeepStrictEqual(projectCartRead(payload(before)).items.sort((left, right) => left.line_id.localeCompare(right.line_id)), projectCartRead(payload(after)).items.sort((left, right) => left.line_id.localeCompare(right.line_id)))) fail();
+}
+
+export function verifyTransition(before, after, intent) {
+  const oldLines = cartLines(before), nextLines = cartLines(after);
+  if (before.CartId !== after.CartId) fail();
+  const adding = intent.operation === 'Add', removing = intent.operation === 'Remove';
+  if (!['Add', 'Remove', 'UpdateCartItem'].includes(intent.operation)) fail();
+  const oldTarget = adding ? null : oldLines.find(line => line.GuildId === intent.guid);
+  if (adding ? oldLines.some(line => line.Id === intent.productId) : !oldTarget || !isDeepStrictEqual(oldTarget, intent.beforeLine)) fail();
+  const targets = nextLines.filter(line => adding ? line.Id === intent.productId : line.GuildId === intent.guid);
+  if (targets.length !== (removing ? 0 : 1)) fail();
+  const nextTarget = targets[0];
+  if (nextTarget && (nextTarget.Id !== intent.productId || nextTarget.QuantityInCart !== intent.quantity || !positive(nextTarget.Price) || nextTarget.Price > intent.ceiling || nextTarget.Total !== nextTarget.Price * intent.quantity || !Number.isSafeInteger(nextTarget.Total) || nextTarget.IsGift || nextTarget.NetUnitValue !== 0)) fail();
+  if (oldTarget && nextTarget && (oldTarget.Price !== nextTarget.Price || oldTarget.Id !== nextTarget.Id || ['ProductType', 'Type', 'Scenario', 'NetUnitValue', 'Note'].some(key => !isDeepStrictEqual(oldTarget[key], nextTarget[key])))) fail();
+  const untouched = oldLines.filter(line => line !== oldTarget);
+  if (!isDeepStrictEqual(sorted(untouched), sorted(nextLines.filter(line => line !== nextTarget)))) fail();
+  const oldPublic = projectCartRead(payload(before)).items.filter(line => adding || line.line_id !== intent.guid);
+  const nextPublic = projectCartRead(payload(after)).items.filter(line => removing || line.line_id !== nextTarget.GuildId);
+  if (!isDeepStrictEqual(sorted(oldPublic.map(line => ({ ...line, GuildId: line.line_id }))), sorted(nextPublic.map(line => ({ ...line, GuildId: line.line_id }))))) fail();
+  if (after.CartTotal.Total !== before.CartTotal.Total - (oldTarget?.Total || 0) + (nextTarget?.Total || 0)) fail();
+  if (nextTarget && projectCartRead(payload(after)).items.find(line => line.line_id === nextTarget.GuildId)?.inactive) fail();
+  return nextTarget;
+}
+
+export function mutationBody(intent, context, credentials) {
+  if (!intent || !CONTEXT.every(key => Number.isSafeInteger(context?.[key]) && context[key] >= (key === 'districtId' ? 0 : 1)) || !identity(context.cartId) || !positive(intent.productId)) fail();
+  const location = Object.fromEntries(CONTEXT.map(key => [key, context[key]]));
+  if (intent.operation === 'Add') {
+    if (!positive(intent.quantity) || !Number.isSafeInteger(intent.productType) || intent.productType < 0 || !Number.isSafeInteger(intent.scenario) || intent.scenario < 0) fail();
+    return { ...location, cartId: context.cartId, productId: intent.productId, quantity: intent.quantity, productType: intent.productType, scenario: intent.scenario, preDateBuy: '', listPromotion: [] };
+  }
+  if (!identity(intent.guid)) fail();
+  if (intent.operation === 'UpdateCartItem' && positive(intent.quantity)) return { ...location, cartId: context.cartId, guid: intent.guid, quantity: intent.quantity, note: '' };
+  if (intent.operation !== 'Remove' || typeof credentials?.token !== 'string' || typeof credentials?.us !== 'string') fail();
+  return { token: credentials.token, us: credentials.us, ...location, isNewModel: true, data: { cartId: context.cartId, guid: intent.guid, reloadShiping: true, isSubmitOrder: false, productId: intent.productId, wardId: context.wardId } };
+}
+
+export function mutationRequestAllowed(request, intent, context, credentials) {
+  try {
+    if (!intent || request.url !== PREFIX + intent.operation || request.method !== 'POST' || typeof request.raw !== 'string' || request.raw.length > 16384) return false;
+    const names = [...request.raw.matchAll(/("(?:[^"\\]|\\.)*")\s*:/g)].map(match => JSON.parse(match[1]));
+    const expected = mutationBody(intent, context, credentials);
+    const expectedNames = [...JSON.stringify(expected).matchAll(/("(?:[^"\\]|\\.)*")\s*:/g)].map(match => JSON.parse(match[1]));
+    return names.length === expectedNames.length && names.every(key => names.filter(name => name === key).length === expectedNames.filter(name => name === key).length) && isDeepStrictEqual(JSON.parse(request.raw), expected);
+  } catch { return false; }
+}
+
+export async function createCartSession({ browserType, profileDirectory: directoryArg, observations = new Map(), expectedBaseline } = {}) {
+  const directory = resolve(directoryArg || profileDirectory());
   if (!(await stat(join(directory, 'Default'))).isDirectory()) fail();
   const chromium = browserType || (await import('playwright')).chromium;
-  const updateMode = true, previewUpdate = false;
-  const observedKeys = ['provinceId', 'districtId', 'wardId', 'storeId', 'cartId', 'guid', 'quantity', 'note'];
-  let ceiling = 6900, publicLineId = null;
-  let browser, page, profile, delivery, cart, baseline, snapshot, line, armed;
-  let fatal = false, addSent = false, removeSent = false, restored = false, cleaning = false;
-  const state = { reads: new WeakMap(), epoch: 0, sequence: 0, applied: 0, addVerified: false, contextUnchanged: true, unsafe: false,
-    restartRequired: false, restartVerified: false };
-  const pending = new Set();
-  let phase = 'startup', failurePhase = null;
-  const failed = failedPhase => { fatal = true; failurePhase ??= failedPhase; };
-  const outcome = { add_sent: false, add_verified: false, price_accepted: false, remove_sent: false, restored_empty: false, cleanup_required: false,
-    restart_persistence_verified: false };
-  const check = value => {
-    if (!profile || !delivery || !value) fail();
-    const current = contextSnapshot(profile, value, delivery);
-    if (snapshot && current !== snapshot) { state.contextUnchanged = false; fail(); }
-    snapshot = current;
-    if (baseline && value.CartId !== baseline.cartId) { state.contextUnchanged = false; fail(); }
-  };
-  const drain = () => drainPending(pending);
-  const awaitState = async predicate => {
-    const deadline = Date.now() + 20000;
-    while (!predicate() && (!fatal || cleaning) && !state.unsafe && Date.now() < deadline) await page.waitForTimeout(100);
-    await drain();
-    if ((fatal && !cleaning) || state.unsafe || !predicate()) fail();
-  };
-  const removeExact = async () => {
-    if (!cleanupEligible(state)) fail();
-    check(cart);
-    const currentLine = trialLine({ HttpCode: 200, ResultCode: 0, Value: cart }, line.QuantityInCart);
-    if (currentLine.GuildId !== line.GuildId) fail();
-    const row = page.locator(`div[data-product="335195"][data-code="${line.GuildId}"]`);
-    await row.waitFor({ state: 'visible', timeout: 5000 });
-    const closeIcon = row.locator('img[alt="close-icon"]');
-    if (await row.count() !== 1 || await closeIcon.count() !== 1) fail();
-    armed = 'Remove';
-    await closeIcon.dispatchEvent('click');
-    await page.waitForTimeout(500);
-    if (!state.removeRequest) {
-      const confirm = page.locator('button:visible').filter({ hasText: /^ĐỒNG Ý$/i });
-      if (await confirm.count() !== 1 || !await confirm.isVisible()) fail();
-      armed = 'Remove';
-      await confirm.click({ timeout: 5000 });
-      await page.waitForTimeout(700);
-      if (!state.removeRequest) {
-        const remove = page.locator('button:visible').filter({ hasText: /^Xóa$/ });
-        if (await remove.count() !== 1) fail();
-        await remove.click({ timeout: 5000 });
-      }
-    }
-  };
-  const verifyRestored = async () => {
-    await awaitState(() => state.removeSucceeded);
-    await page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
-    await awaitState(() => restored);
-  };
+  const owned = new Map(), pending = new Set(), reads = new WeakMap();
+  let browser, page, profile, delivery, context, snapshot, cart, expectedCart, selected, detail, searchProducts, searchContext, query, headers, credentials, armed;
+  let probingRemove = null;
+  let fatal = false, serial = Promise.resolve(), generation = 0, readSequence = 0, applied = 0;
   const close = async () => { await browser?.close().catch(() => {}); };
-
-
-  const openBrowser = async () => {
-    browser = await chromium.launchPersistentContext(directory, {
-      headless: process.env.BHX_HEADED !== '1', offline: true, serviceWorkers: 'block', viewport: { width: 1280, height: 900 },
-      executablePath: process.env.BHX_CHROMIUM_PATH, timeout: 30000,
-    });
-    if(fatal){await close();fail();}
+  const drain = async () => { while (pending.size) await Promise.allSettled([...pending]); if (fatal) fail(); };
+  const check = value => {
+    cartLines(value);
+    const current = contextSnapshot(profile, value, delivery);
+    if (snapshot && snapshot !== current || context && value.CartId !== context.cartId) fail();
+    snapshot = current;
+  };
+  const wait = async predicate => {
+    const deadline = Date.now() + 20000;
+    while (!fatal && !predicate() && Date.now() < deadline) await page.waitForTimeout(50);
+    await drain();
+    if (!predicate()) fail();
+  };
+  const open = async () => {
+    browser = await chromium.launchPersistentContext(directory, { headless: process.env.BHX_HEADED !== '1', offline: true, serviceWorkers: 'block', viewport: { width: 1280, height: 900 }, executablePath: process.env.BHX_CHROMIUM_PATH, timeout: 30000 });
     page = await browser.newPage();
-    page.setDefaultTimeout(10000);
-    page.setDefaultNavigationTimeout(10000);
-    page.on('request', request => {
-      if ([PREFIX + 'get', PREFIX + 'getAfter'].includes(request.url())) state.reads.set(request, {
-        phase: state.removeSucceeded ? 'fresh' : state.addRequest ? 'trial' : 'baseline',
-        epoch: state.epoch, sequence: ++state.sequence });
-    });
+    page.setDefaultNavigationTimeout(20000);
     for (const old of browser.pages()) if (old !== page) await old.close();
     await browser.route('**/*', async route => {
-      const q = route.request();
+      const request = route.request();
       try {
-        const url = q.url();
-        if (url === PREFIX + 'UpdateCartItem' && updateMode) {
-          const raw = q.postData();
-          const candidateKeys = previewUpdate ? Object.keys(JSON.parse(raw)) : observedKeys;
-          const valid = !fatal && armed === 'Update' && q.method() === 'POST' &&
-            q.frame() === page.mainFrame() && !q.isNavigationRequest() && page.url() === ORIGIN + '/gio-hang' &&
-            /^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(q.headers()['content-type'] || '') &&
-            updateAllowed(raw, baseline, line, state, candidateKeys) &&
-            (previewUpdate || keys(JSON.parse(raw), observedKeys));
-          if (!valid) { failed('update_guard'); state.unsafe = true; await route.abort(); return; }
-          check(cart);
-          armed = null; state.updateObserved = true; state.epoch++;
-          if (previewUpdate) {
-            await route.abort();
-            fail();
-            outcome.update_preview_aborted = true;
-          } else {
-            state.updateRequest = q;
-            outcome.update_sent = true;
-            await route.continue();
-          }
-          return;
+        const url = new URL(request.url());
+        if (fatal || request.frame() !== page.mainFrame()) { await route.abort(); return; }
+        if (probingRemove && request.url() === PREFIX + 'Remove') {
+          const body = request.postDataJSON();
+          const candidate = { token: body?.token, us: body?.us };
+          if (!mutationRequestAllowed({ url: request.url(), method: request.method(), raw: request.postData() }, probingRemove, context, candidate)) fail();
+          credentials = candidate; probingRemove = null; await route.abort(); return;
         }
-        if (url === PREFIX + 'Add' || url === PREFIX + 'Remove') {
-          const operation = url.endsWith('/Add') ? 'Add' : 'Remove';
-          const valid = (!fatal || (cleaning && operation === 'Remove' && cleanupEligible(state))) && !state.unsafe && armed === operation && q.method() === 'POST' &&
-            q.frame() === page.mainFrame() && !q.isNavigationRequest() &&
-            /^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(q.headers()['content-type'] || '') &&
-            page.url() === (operation === 'Add' ? PRODUCT : ORIGIN + '/gio-hang') &&
-            (operation === 'Add' ? !addSent && validateAdd(q.postData(), baseline) && q.postDataJSON().productType === 1 && q.postDataJSON().scenario === 0 :
-              !removeSent && line && validateRemove(q.postData(), baseline, line.GuildId));
-          if (!valid) { failed('mutation_guard'); state.unsafe = true; await route.abort(); return; }
-          armed = null;
-          state.epoch++;
-          if (operation === 'Add') { addSent = true; state.addRequest = q; }
-          else { removeSent = true; state.removeRequest = q; }
-          await route.continue();
-          return;
-        }
-        if (new URL(url).pathname === '/gw/Product/GetPopupProduct') {
-          outcome.popup_observed = true;
-          const popup = { failed: false, armed: armed === 'Add' && !addSent && !fatal, baseline };
-          await popupGuard(route, popup, page.mainFrame());
-          if (popup.failed) { failed('popup_guard'); state.unsafe = true; }
-          return;
-        }
-        if (new URL(url).origin === API && new URL(url).pathname === '/gw/LocationV3/GetFull') {
-          if(q.method()==='GET' && !new URL(url).search && q.frame()===page.mainFrame()) {await route.continue();return;}
-        }
-        if (url === PREFIX + 'getAfter') {
-          if (q.frame() !== page.mainFrame() || state.unsafe || q.method() !== 'POST' || q.isNavigationRequest() || !validateRefresh(q.postData(), baseline)) fail();
+        if (url.origin === API && url.pathname === '/gw/cart/api/OrderV2/GetRecommandStores') { await route.abort(); return; }
+        if (url.origin === API && url.pathname.startsWith('/gw/cart/api/OrderV2/') && !['get', 'getAfter'].includes(url.pathname.slice('/gw/cart/api/OrderV2/'.length))) {
+          if (!armed || page.url() !== SITE + '/gio-hang' || request.isNavigationRequest() || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.headers()['content-type'] || '') || !mutationRequestAllowed({ url: request.url(), method: request.method(), raw: request.postData() }, armed.intent, context, credentials)) fail();
+          sameCart(armed.before, cart); check(cart);
+          armed.sent = true; armed = null; generation++;
           await route.continue(); return;
         }
-        if (url === PREFIX + 'get') {
-          const body = q.postDataJSON();
-          if (!['provinceId','districtId','wardId','storeId'].every(key => Number.isSafeInteger(body[key]) &&
-              (key === 'districtId' ? body[key] >= 0 : body[key] > 0) && (!baseline || body[key] === baseline[key]))) fail();
+        let allow = false;
+        if (request.url() === PREFIX + 'get') {
+          const body = request.postDataJSON();
+          if (request.method() !== 'POST' || request.isNavigationRequest() || !CONTEXT.every(key => Number.isSafeInteger(body?.[key]) && body[key] >= (key === 'districtId' ? 0 : 1) && (!context || body[key] === context[key]))) fail();
+          reads.set(request, { generation, sequence: ++readSequence, delivery: Object.fromEntries(CONTEXT.map(key => [key, body[key]])) });
+          headers = request.headers(); allow = true;
+        } else if (request.url() === PREFIX + 'getAfter') {
+          if (request.method() !== 'POST' || request.isNavigationRequest() || !validateRefresh(request.postData(), context)) fail();
+          const body = request.postDataJSON(); credentials = { token: body.token, us: body.us };
+          reads.set(request, { generation, sequence: ++readSequence, delivery }); allow = true;
+        } else if (request.isNavigationRequest()) {
+          allow = request.method() === 'GET' && [SITE + '/tim-kiem?key=' + encodeURIComponent(query), SITE + '/gio-hang', ...(selected ? [SITE + selected.path] : [])].includes(request.url());
+        } else if (url.pathname === '/gw/Product/GetProductDetail') {
+          allow = detailRequestAllowed(request.url(), request.method(), selected, delivery);
+        } else if (request.url() === SEARCH) {
+          const body = request.postDataJSON();
+          allow = request.method() === 'POST' && body?.keywords === query;
+          if (allow) reads.set(request, { generation, search: true, delivery: Object.fromEntries(CONTEXT.map(key => [key, body[key]])) });
+        } else if (request.url() === API + '/gw/search/GetSuggestSearchNew') {
+          allow = request.method() === 'POST' && request.postDataJSON()?.keyword === query;
+        } else if (request.url() === API + '/gw/search/v2/FilterSearch') {
+          allow = request.method() === 'POST' && request.postDataJSON()?.keywords === query;
+        } else if (url.origin === API && ['/gw/BigBang/GetProductsPromoteCartV2ByCate', '/gw/cart/api/VoucherCoupon/v3/GetListVoucherCoupon'].includes(url.pathname)) {
+          await route.abort(); return;
+        } else if (request.url() === API + '/gw/User/GetRankCustomerNew') {
+          await route.abort(); return; // Optional loyalty read; never needed for cart authorization.
+        } else if (request.url() === API + '/gw/LocationV3/GetFull') allow = request.method() === 'GET';
+        else allow = allowedRequest(request.url(), request.method(), false, request.resourceType(), '/gio-hang');
+        if (!allow) {
+          if (request.isNavigationRequest()) { fatal = true; if (process.env.BHX_DIAGNOSTICS === '1') console.error(JSON.stringify({ blocked_path: url.pathname })); }
+          await route.abort(); return;
         }
-        if ((fatal && !cleaning) || state.unsafe || q.frame() !== page.mainFrame() || !allowedRequest(url, q.method(), q.isNavigationRequest(), q.resourceType(), '/gio-hang')) {
-          await route.abort();
-        }
-        else await route.continue();
-      } catch { failed('request_guard'); state.unsafe = true; await route.abort().catch(() => {}); }
+        await route.continue();
+      } catch { fatal = true; if (process.env.BHX_DIAGNOSTICS === '1') console.error(JSON.stringify({ mutation_guard_path: new URL(request.url()).pathname })); await route.abort().catch(() => {}); }
     });
     page.on('response', response => {
-      const url = response.url();
-      if (![PROFILE, PREFIX + 'get', PREFIX + 'getAfter', PREFIX + 'Add', PREFIX + 'Remove', ...(updateMode ? [PREFIX + 'UpdateCartItem'] : [])].includes(url)) return;
-      let responsePhase = 'response_transport';
+      const request = response.request(), url = response.url(), read = reads.get(request);
+      if (url !== PROFILE && !read && !(selected && new URL(url).pathname === '/gw/Product/GetProductDetail')) return;
       const task = (async () => {
-        const request = response.request();
-        if (url !== PROFILE && classifyResponse(request, state) === 'ignore') return;
-        if (!response.ok() || request.frame() !== page.mainFrame()) fail();
-        responsePhase = 'response_json';
-        const payload = await Promise.race([response.json(), new Promise((_, reject) => { const timer=setTimeout(()=>reject(Error('READ_TIMEOUT')),10000);timer.unref(); })]);
-        if (url !== PROFILE && classifyResponse(request, state) === 'ignore') return;
-        if (url === PROFILE) {
-          responsePhase = 'profile_context';
-          if (state.addRequest) {
-            if (contextSnapshot(payload, cart, delivery) !== snapshot) fail();
-          }
-          profile = payload; state.profileVerified = true; return;
-        }
-        const kind = classifyResponse(request, state);
-        if (kind === 'ignore') return;
-        if (url === PREFIX + 'get') {
-          responsePhase = 'read_context';
-          const body = response.request().postDataJSON();
-          const next = Object.fromEntries(['provinceId', 'districtId', 'wardId', 'storeId'].map(k => [k, body[k]]));
-          if (delivery && JSON.stringify(delivery) !== JSON.stringify(next)) fail();
-          delivery = next;
-        }
-        const next = payload?.Value;
-        if (kind === 'add') {
-          responsePhase = 'add_acknowledgement';
-          acknowledgeAdd(payload, baseline);
-          state.addAcknowledged = true;
-          outcome.add_acknowledged = true;
-          return;
-        }
-        if (kind === 'update') {
-          responsePhase = 'update_acknowledgement';
-          if (payload?.HttpCode !== 200 || payload?.ResultCode !== 0) fail();
-          state.updateAcknowledged = true;
-          return;
-        }
-        if (kind === 'baseline') {
-          responsePhase = 'baseline_schema';
-          if (baseline) check(next);
-          projectCart(payload);
-          if (!baseline && id(next?.CartId)) baseline = { ...delivery, cartId: next.CartId };
-          cart = next;
-        } else {
-          responsePhase = kind + '_context';
-          check(next);
-          responsePhase = kind + '_schema';
-          if (kind === 'trial') {
-            const nextLine = trialLine(payload, state.updateRequest ? 2 : 1);
-            if (line && line.GuildId !== nextLine.GuildId) fail();
-            line = nextLine;
-            state.line = line;
-            if (!priceAccepted(line) || line.Price > ceiling || next.CartTotal.Total !== line.Total) failed('price_ceiling');
-            cart = next;
-            state.addVerified = true;
-            outcome.add_verified = true;
-            if (state.updateRequest) outcome.update_verified = true;
-            if (state.updateObserved) state.updateReadVerified = true;
-          } else if (kind === 'remove') {
-            projectCart(payload);
-            cart = next;
-            state.removeSucceeded = true;
-            state.epoch++;
-          } else if (kind === 'fresh') {
-            projectCart(payload);
-            cart = next;
-            restored = true;
-          }
-        }
-        const read = state.reads.get(request);
-        if (read) state.applied = read.sequence;
-      })().catch(() => { outcome.response_failure ??= responsePhase; failed(responsePhase); state.unsafe = true; state.contextUnchanged = false; });
-      pending.add(task); void task.finally(() => pending.delete(task));
+        if (!response.ok()) fail();
+        const body = await response.json();
+        if (read && read.generation !== generation) return;
+        if (url === PROFILE) { if (snapshot && contextSnapshot(body, cart, delivery) !== snapshot) fail(); profile = body; }
+        else if (read?.search) {
+          searchContext = read.delivery; searchProducts = projectProducts(body);
+        } else if (read) {
+          if (read.sequence < applied) return;
+          if (body?.HttpCode !== 200 || body?.ResultCode !== 0) fail();
+          if (delivery && !isDeepStrictEqual(delivery, read.delivery)) fail();
+          delivery = read.delivery; cartLines(body.Value);
+          cart = body.Value; applied = read.sequence;
+          if (snapshot) check(cart);
+        } else detail = projectProduct(body, selected.id);
+      })().catch(() => { fatal = true; }).finally(() => pending.delete(task));
+      pending.add(task);
     });
+    await browser.setOffline(false);
+    await page.goto(SITE + '/tim-kiem?key=' + encodeURIComponent(query), { waitUntil: 'domcontentloaded' });
+    await wait(() => profile && cart && delivery);
+    context = { ...delivery, cartId: cart.CartId }; check(cart);
+    if (expectedBaseline && (!isDeepStrictEqual(projectCartRead(payload(cart)), expectedBaseline.cart) || ['store_id', 'province_id', 'ward_id'].some((key, index) => expectedBaseline.context?.[key] !== [context.storeId, context.provinceId, context.wardId][index]) || expectedBaseline.context?.address_id !== String(cart.ShipAddressId))) fail();
+    expectedCart = structuredClone(cart);
   };
   const refresh = async () => {
-    state.epoch++;
-    restored = false;
-    const before = state.sequence;
-    await page.goto(ORIGIN + '/gio-hang', { waitUntil: 'domcontentloaded' });
-    await awaitState(() => state.applied > before);
-    await page.waitForTimeout(2500);
-    await drain(); check(cart);
+    const before = applied;
+    await page.goto(SITE + '/gio-hang', { waitUntil: 'domcontentloaded' });
+    if (applied === before) await page.reload({ waitUntil: 'domcontentloaded' });
+    await wait(() => applied > before);
+    await page.waitForTimeout(500); await drain(); check(cart);
   };
-  let serial = Promise.resolve();
+  const publicCart = () => {
+    const value = { address_id: String(cart.ShipAddressId), store_id: context.storeId, province_id: context.provinceId, ward_id: context.wardId, verified: true, source: 'authenticated-browser' };
+    value.delivery_context_id = createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 24);
+    return { ...projectCartRead(payload(cart)), context: value, observed_at: new Date().toISOString() };
+  };
+  const run = callback => {
+    const result = serial.then(async () => {
+      if (fatal) fail();
+      const timer = setTimeout(() => { fatal = true; void close(); }, 60000);
+      try { return await callback(); }
+      catch (error) { fatal = true; if (process.env.BHX_DIAGNOSTICS === '1') console.error(JSON.stringify({ mutation_failure_type: error?.name, mutation_failure_frame: error?.stack?.split('\n')[2]?.replace(/.*cart-mutations.mjs/, 'cart-mutations.mjs'), mutation_failure_code: String(error?.message).startsWith('BHX_') ? error.message : 'runtime-error' })); throw Error('BHX_MUTATION_UNVERIFIED: cleanup_required; stop, inspect cart, no retry or automatic cleanup'); }
+      finally { clearTimeout(timer); armed = null; if (fatal) await close(); }
+    });
+    serial = result.catch(() => {}); return result;
+  };
   return {
     close,
-    async readCart() {
-      await serial;
-      if(fatal || !browser)fail();
+    readCart: () => run(async () => { if (!browser) fail(); await refresh(); sameCart(expectedCart, cart); return publicCart(); }),
+    mutate: (name, args) => run(async () => {
+      validateMutation(name, args);
+      const observation = name === 'bhx_add_to_cart' ? observations.get(args.product_id) : null;
+      if (!browser) {
+        if (!observation) fail();
+        query = observation.query; await open();
+      }
+      await refresh(); sameCart(expectedCart, cart);
+      let intent, handle;
+      if (name === 'bhx_add_to_cart') {
+        if (!observation || Date.now() - observation.at > 300000 || observation.context?.verified !== true || observation.context.address_id !== String(cart.ShipAddressId) || observation.context.store_id !== context.storeId || observation.context.province_id !== context.provinceId || observation.context.ward_id !== context.wardId || cartLines(cart).some(line => line.Id === args.product_id)) fail();
+        query = observation.query; selected = null; searchProducts = null; detail = null;
+        await page.goto(SITE + '/tim-kiem?key=' + encodeURIComponent(query), { waitUntil: 'domcontentloaded' });
+        await wait(() => searchProducts);
+        if (!matchContext(profile, cart, delivery, searchContext).search_cart_match) fail();
+        const matches = searchProducts.filter(product => product.id === args.product_id);
+        if (matches.length !== 1) fail(); selected = matches[0];
+        if (!/^\/[a-z0-9-]+\/[a-z0-9-]+$/.test(selected.path)) fail();
+        await page.goto(SITE + selected.path, { waitUntil: 'domcontentloaded' });
+        await wait(() => detail);
+        const heading = page.locator('div.sticky h1');
+        await heading.waitFor({ state: 'visible', timeout: 10000 });
+        if (await heading.count() !== 1 || (await heading.innerText()).trim() !== selected.name || detail.variant === null || detail.scenario === null || detail.prices.some(price => price.can_buy !== true || !positive(price.price_vnd) || price.list_price_vnd > args.max_unit_price_vnd) || selected.prices.some(price => price.can_buy !== true) || !Number.isSafeInteger(args.quantity * args.max_unit_price_vnd)) fail();
+        intent = { operation: 'Add', productId: args.product_id, quantity: args.quantity, productType: detail.variant, scenario: detail.scenario, ceiling: args.max_unit_price_vnd };
+      } else {
+        const ownership = owned.get(args.line_id); if (!ownership) fail();
+        const current = cartLines(cart).find(line => line.GuildId === ownership.line.GuildId);
+        if (!isDeepStrictEqual(current, ownership.line)) fail();
+        handle = args.line_id;
+        intent = { operation: name === 'bhx_remove_cart_item' ? 'Remove' : 'UpdateCartItem', productId: current.Id, guid: current.GuildId, quantity: args.quantity, ceiling: ownership.ceiling, beforeLine: current };
+        if (name === 'bhx_update_cart_item' && (!Number.isSafeInteger(args.quantity * current.Price) || current.QuantityInCart === args.quantity)) fail();
+      }
+      await refresh(); sameCart(expectedCart, cart);
+      if (intent.operation === 'Remove' && (!credentials || typeof credentials.token !== 'string' || typeof credentials.us !== 'string')) {
+        probingRemove = intent;
+        const row = page.locator(`div[data-product="${intent.productId}"][data-code="${intent.guid}"]`);
+        if (await row.count() !== 1 || await row.locator('img[alt="close-icon"]').count() !== 1) fail();
+        await row.locator('img[alt="close-icon"]').dispatchEvent('click');
+        await page.waitForTimeout(500);
+        if (probingRemove) {
+          const confirm = page.locator('button:visible').filter({ hasText: /^ĐỒNG Ý$/i });
+          if (await confirm.count() === 1) await confirm.click();
+          await page.waitForTimeout(700);
+        }
+        if (probingRemove) {
+          const remove = page.locator('button:visible').filter({ hasText: /^Xóa$/ });
+          if (await remove.count() !== 1) fail();
+          await remove.click();
+        }
+        await wait(() => !probingRemove);
+        await refresh(); sameCart(expectedCart, cart);
+      }
+      const before = structuredClone(cart), body = mutationBody(intent, context, credentials);
+      const permittedHeaders = Object.fromEntries(Object.entries(headers || {}).filter(([key]) => !['host', 'content-length', 'cookie', 'origin', 'referer', 'connection', 'accept-encoding'].includes(key) && !key.startsWith('sec-')));
+      const ticket = { intent, before, sent: false }; armed = ticket;
+      const acknowledgement = await page.evaluate(async ({ url, body, headers }) => {
+        const response = await fetch(url, { method: 'POST', credentials: 'include', redirect: 'error', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        if (!response.ok) throw Error('MUTATION_HTTP');
+        return response.json();
+      }, { url: PREFIX + intent.operation, body, headers: permittedHeaders });
+      if (process.env.BHX_DIAGNOSTICS === '1') console.error(JSON.stringify({ mutation_operation: intent.operation, acknowledgement_code: acknowledgement?.ResultCode, acknowledgement_value_keys: Object.keys(acknowledgement?.Value || {}), before_count: cartLines(before).length }));
+      if (!ticket.sent || acknowledgement?.HttpCode !== 200 || acknowledgement?.ResultCode !== 0 || intent.operation === 'Add' && acknowledgement.Value?.CartId !== context.cartId) fail();
       await refresh();
-      if(fatal || state.unsafe || !state.contextUnchanged)fail();
-      return {...projectCartRead({HttpCode:200,ResultCode:0,Value:cart}),context:{verified:true,store_id:baseline.storeId,province_id:baseline.provinceId,ward_id:baseline.wardId},observed_at:new Date().toISOString()};
-    },
-    mutate(name, args) {
-      const operation = serial.then(async () => {
-        validateMutation(name, args);
-        if (fatal || state.unsafe) fail();
-        if (name !== 'bhx_add_to_cart' && (!publicLineId || args.line_id !== publicLineId)) throw Error('UNKNOWN_RUNTIME_LINE');
-        const deadline=setTimeout(()=>{failed('timeout');state.unsafe=true;void close().catch(()=>{});},60000);
-        try {
-          if (!browser) {
-            await openBrowser();
-            await browser.setOffline(false);
-            await page.goto(ORIGIN + '/tim-kiem?key=' + encodeURIComponent('cải ngọt'), { waitUntil: 'domcontentloaded' });
-            await awaitState(() => profile && cart && delivery);
-            check(cart);
-            baseline = { ...delivery, cartId: cart.CartId };
-            if (!id(baseline.cartId)) fail();
-          }
-          if (name === 'bhx_add_to_cart') {
-            if (addSent) throw Error('UNVERIFIED_SCOPE: one Add per server session');
-            ceiling = Math.min(args.max_unit_price_vnd, 6900);
-            await refresh();
-            projectCart({ HttpCode: 200, ResultCode: 0, Value: cart });
-            await page.goto(PRODUCT, { waitUntil: 'domcontentloaded' });
-            const handle = await page.waitForFunction(productUI, undefined, { timeout: 20000 }); await handle.dispose();
-            await drain(); check(cart);
-            if (page.url() !== PRODUCT || !(await page.evaluate(productUI))?.verified5000 || ceiling < 6900) throw Error('PRICE_UNVERIFIED: observed cart may charge 6900 VND');
-            projectCart({ HttpCode: 200, ResultCode: 0, Value: cart });
-            const purchase = page.locator('div.sticky').filter({ has: page.getByRole('heading', { name: 'Cải ngọt túi 400g', exact: true }) }).locator(':scope > div.px-9px > button').filter({ hasText: /^Mua$/ });
-            if (await purchase.count() !== 1 || !await purchase.isEnabled()) fail();
-            armed = 'Add'; await purchase.click({ timeout: 5000 });
-            await awaitState(() => state.addAcknowledged);
-            await refresh();
-            if (!state.addVerified || !line || line.QuantityInCart !== 1) fail();
-            publicLineId = randomUUID();
-          } else {
-            await refresh();
-            const current = trialLine({ HttpCode: 200, ResultCode: 0, Value: cart }, line.QuantityInCart);
-            if (current.GuildId !== line.GuildId || !state.contextUnchanged) fail();
-            if (name === 'bhx_update_cart_item') {
-              if (line.QuantityInCart !== 1 || state.updateObserved) throw Error('UNVERIFIED_SCOPE: only quantity 1 to 2');
-              const row = page.locator(`div[data-product="335195"][data-code="${line.GuildId}"]`);
-              const plus = row.locator('img[alt="plus"]');
-              if (await row.count() !== 1 || await plus.count() !== 1) fail();
-              await page.waitForTimeout(2500);
-              armed = 'Update'; await plus.locator('..').dispatchEvent('click');
-              await page.waitForTimeout(1500);
-              await awaitState(() => state.updateAcknowledged);
-              state.updateReadVerified = false;
-              await refresh();
-              if (!state.updateReadVerified || line.QuantityInCart !== 2) fail();
-            } else {
-              await removeExact();
-              await awaitState(() => state.removeSucceeded);
-              await refresh();
-              if (!restored) fail();
-              publicLineId = null;
-            }
-          }
-          if (fatal || state.unsafe) fail();
-          return { verified: true, operation: name, items: publicLineId ? [{ line_id: publicLineId, product_id: 335195, quantity: line.QuantityInCart, unit_price_vnd: line.Price, total_vnd: line.Total }] : [], observed_at: new Date().toISOString() };
-        } catch {
-          if(process.env.BHX_DIAGNOSTICS==='1')console.error(JSON.stringify({failurePhase,unsafe:state.unsafe,updateObserved:!!state.updateObserved,updateAcknowledged:!!state.updateAcknowledged,quantity:line?.QuantityInCart}));
-          fatal = true; armed = null;
-          throw Error('BHX_MUTATION_UNVERIFIED: operation may have applied; no retry or automatic cleanup. Inspect cart before further action.');
-        } finally { clearTimeout(deadline);armed = null;if(fatal)await close(); }
-      });
-      serial = operation.catch(() => {});
-      return operation;
-    }
+      const next = verifyTransition(before, cart, intent);
+      if (next) owned.set(handle || randomUUID(), { line: structuredClone(next), ceiling: intent.ceiling });
+      else owned.delete(handle);
+      expectedCart = structuredClone(cart);
+      return { verified: true, operation: name, items: [...owned].map(([lineId, entry]) => ({ line_id: lineId, product_id: entry.line.Id, quantity: entry.line.QuantityInCart, unit_price_vnd: entry.line.Price, total_vnd: entry.line.Total })), observed_at: new Date().toISOString() };
+    }),
   };
 }
