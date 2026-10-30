@@ -1,23 +1,53 @@
 # BHX MCP
 
-Phase 0 research only. Not a functional MCP server. See [specification](IMPLEMENTATION_SPEC.md) and [feasibility](docs/feasibility.md). No checkout/payment tools exist.
+Authenticated Bach Hoa Xanh MCP server over stdio, integrated with Hermes (`mcp_servers.bhx`). Guarded cart mutations only — **no checkout, no payment, no order placement** anywhere in this codebase.
 
-Offline checks: `node scripts/check.mjs` (not authenticated integration tests).
+## Status (2026-10-30)
 
-Research observer is not shipped: initial prototype had overly broad diagnostic output and unreliable UI/variant correlation. Sanitized findings retained in docs; replace observer before further automated research.
+Working and integrated, **not production-ready**. Do not treat any section below as full spec acceptance; see [acceptance ledger](docs/phase-acceptance.md).
 
-## Interactive login POC
+| Area | State |
+|---|---|
+| MCP stdio init + discovery of 13 tools | verified |
+| Interactive login tool, persistent authenticated profile | verified |
+| Saved addresses, delivery context, cart read/summary | verified |
+| Product search + generic product detail | verified (partial: stock/promotion semantics unknown) |
+| Two-product live cart cycle with unrelated-item preservation | verified |
+| Cross-address switching, inventory guarantees, mobile-app sync | **not verified / blocked** |
 
-Node >=22 required. `npm ci --ignore-scripts`; install matching Chromium with `npx playwright install chromium` if not using an existing compatible browser. On local graphical Linux desktop, run `npm run login`. Optional `BHX_CHROMIUM_PATH` selects existing executable; `BHX_PROFILE_DIR` selects restricted profile outside repository. Default profile: `~/.local/share/bhx-mcp/profile` (0700).
+No checkout or payment tool exists, and the request allowlist refuses those routes.
 
-Current research host has headed Playwright browser on display :91. VNC port 5907 is loopback-only. From user's own machine with authorized SSH access:
+## Requirements
+
+Node >= 22, Playwright 1.64.1 (`npm ci --ignore-scripts`), and a Chromium executable. Set `BHX_CHROMIUM_PATH` if Playwright's default path is not used. `BHX_PROFILE_DIR` selects the persistent profile (default `~/.local/share/bhx-mcp/profile`, mode 0700). Never commit profile/session/cookie files.
+
+## Running
 
 ```sh
-ssh -N -L 5907:127.0.0.1:5907 USER@LAN_IP
+npm start          # MCP stdio server
+npm run login      # interactive login (headed browser; OTP/CAPTCHA are human-operated)
+npm test           # offline regression suites (no network, no browser)
+npm run cart-live  # authorized live cart trial driver (see docs/cart-acceptance.md)
+npm run evidence   # structured evidence run (see scripts/evidence-run.py)
 ```
 
-Connect VNC client to `127.0.0.1:5907`. Enter credentials/OTP directly into BHX, never into chat. VNC has no separate password and MUST remain loopback-only behind SSH; never forward/bind to public or LAN interfaces. Do not share tunnel or authenticated desktop. No browser debugging endpoint required.
+Register in Hermes as an stdio server pointing at `src/server.mjs`; `scripts/tools-list-check.py` exercises init + `tools/list` locally.
 
-Login browser currently runs via `DISPLAY=:91 BHX_CHROMIUM_PATH=/path/to/chrome npm run login`. This is temporary research infrastructure, not production deployment. Close browser to stop login POC. Re-run same command/profile for reauthentication. Authenticated profile retrieval and selected delivery state survived browser/process restart in Phase 0; expiry, reauthentication and MCP lifecycle remain unverified.
+## Safety model
 
-No MCP registered. Production Compose, tool discovery and authenticated smoke tests deferred until feasibility gates pass. Do not treat a dependency install or login browser as completed integration.
+- Every mutation needs exact arguments plus explicit `user_authorized: true`.
+- Add requires a recent authenticated search observation in the same process, an exact product route read, observed variant/context match, price within the caller's ceiling, and no existing line for that product.
+- Update/Remove require a process-local ownership handle for an exact line. Restart loses handles.
+- Each write takes a fresh before-cart snapshot, guards the exact request/route/context/line, then verifies **only** the intended transition. Any unrelated line, total, identity or context drift stops the session.
+- Unknown requests, unexpected HTTP methods, extra sends, ambiguous responses and nonempty-cart address changes fail closed. No automatic retry, no automatic cleanup.
+- Private account data stays out of Git: evidence lands in gitignored `data/`, session/cookie/token values are never printed.
+
+## Docs
+
+- [implementation spec](IMPLEMENTATION_SPEC.md)
+- [feasibility](docs/feasibility.md)
+- [runtime + mutation gates](docs/mcp-runtime.md)
+- [acceptance ledger](docs/phase-acceptance.md)
+- [cart acceptance](docs/cart-acceptance.md)
+- [catalog acceptance](docs/catalog-acceptance.md)
+- [address acceptance](docs/address-acceptance.md)
