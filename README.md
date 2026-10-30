@@ -53,3 +53,4 @@ Register in Hermes as an stdio server pointing at `src/server.mjs`; `scripts/too
 - [catalog acceptance](docs/catalog-acceptance.md)
 - [address acceptance](docs/address-acceptance.md)
 - [failure-path regression + snapshot review](docs/failure-paths.md)
+- [per-store price localization](docs/localization.md)
