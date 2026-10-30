@@ -157,7 +157,7 @@ for (const [label, mutation] of [
 {
   for (const [thrown, expected] of [['BHX_ADDRESS_NONEMPTY_CART', 'BHX_ADDRESS_NONEMPTY_CART'],
     ['BHX_ADDRESS_SELECTION_UNVERIFIED', 'BHX_ADDRESS_SELECTION_UNVERIFIED'],
-    ['weird failure', 'OPERATION_UNVERIFIED: inspect selected address or private login browser before retrying.']]) {
+    ['weird failure', 'OPERATION_UNVERIFIED: inspect selected address or login relay before retrying.']]) {
     const h = createHandler({ addressSelector: async () => { throw Error(thrown); }, loginFactory: () => ({ active: () => false, start: async () => ({}), close: async () => {} }) });
     await h.handle({ jsonrpc: '2.0', id: 1, method: 'initialize' });
     const r = await h.handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'bhx_select_address', arguments: { address_id: '110346409' } } });

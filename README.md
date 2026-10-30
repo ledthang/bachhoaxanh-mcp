@@ -8,8 +8,8 @@ Working and integrated, **not production-ready**. Do not treat any section below
 
 | Area | State |
 |---|---|
-| MCP stdio init + discovery of 13 tools | verified |
-| Interactive login tool, persistent authenticated profile | verified |
+| MCP stdio init + discovery of 14 tools | verified |
+| Relay login tools (start→OTP→submit), persistent authenticated profile | verified (end-to-end `logged_in` pending OTP quota reset) |
 | Saved addresses, delivery context, cart read/summary | verified |
 | Product search + generic product detail | verified (partial: stock/promotion semantics unknown) |
 | Two-product live cart cycle with unrelated-item preservation | verified |
@@ -26,7 +26,7 @@ Node >= 22, Playwright 1.64.1 (`npm ci --ignore-scripts`), and a Chromium execut
 
 ```sh
 npm start          # MCP stdio server
-npm run login      # interactive login (headed browser; OTP/CAPTCHA are human-operated)
+npm run login      # relay login: triggers SMS OTP to BHX_PHONE, then submit via bhx_login_submit
 npm test           # offline regression suites (no network, no browser)
 npm run cart-live  # authorized live cart trial driver (see docs/cart-acceptance.md)
 npm run evidence   # structured evidence run (see scripts/evidence-run.py)

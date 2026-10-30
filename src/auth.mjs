@@ -1,38 +1,76 @@
 import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdir, open, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export function createLogin({ display=process.env.DISPLAY, launch=spawn }={}) {
-  let current;
-  const close=async()=>{
-    const state=current;if(!state)return;
-    state.child?.kill('SIGTERM');
-    await Promise.race([state.exited,new Promise((_,reject)=>{const t=setTimeout(()=>reject(Error('LOGIN_CLOSE_UNVERIFIED')),5000);t.unref();})]);
-    if(current===state)current=null;
+// Relay login: detached headless child + file transport under the profile dir,
+// so the relay survives MCP server restarts and spans chat turns.
+// relay.log carries JSON events; otp.code carries the relayed code (0600).
+export function createLogin({ launch = spawn, startTimeoutMs = 85000, waitOutcomeMs = 60000, pollMs = 1000 } = {}) {
+  const dir = () => process.env.BHX_PROFILE_DIR || join(process.env.HOME || '/home/openclaw', '.local/share/bhx-mcp');
+  const P = (...parts) => join(dir(), ...parts);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const read = async path => { try { return await readFile(path, 'utf8'); } catch { return ''; } };
+  function relayPid() {
+    try { const n = Number(readFileSync(P('relay.pid'), 'utf8').trim()); return Number.isSafeInteger(n) && n > 0 ? n : 0; } catch { return 0; }
+  }
+  function alive() { const n = relayPid(); if (!n) return false; try { process.kill(n, 0); return true; } catch { return false; } }
+  function kill() { const n = relayPid(); if (!n) return; try { process.kill(n, 'SIGTERM'); } catch { /* already gone */ } }
+  async function waitAny(markers, ms) {
+    for (let waited = 0; waited < ms; waited += pollMs) {
+      const log = await read(P('relay.log'));
+      for (const marker of markers) if (log.includes(marker)) return marker;
+      await sleep(pollMs);
+    }
+    return null;
+  }
+  function lastLine(marker) {
+    try {
+      const lines = readFileSync(P('relay.log'), 'utf8').split('\n').filter(l => l.includes(marker));
+      if (!lines.length) return null;
+      try { return JSON.parse(lines[lines.length - 1]); } catch { return null; }
+    } catch { return null; }
+  }
+  return {
+    active: () => alive(),
+    async start() {
+      if (alive()) return { status: 'otp_pending', note: 'relay already running; send the code, it will be picked up' };
+      try {
+        await mkdir(dir(), { recursive: true, mode: 0o700 });
+        await rm(P('otp.code'), { force: true });
+        const fd = await open(P('relay.log'), 'w');
+        const child = launch(process.execPath, [fileURLToPath(new URL('../scripts/login.mjs', import.meta.url))], { detached: true, stdio: ['ignore', fd.fd, fd.fd] });
+        await writeFile(P('relay.pid'), String(child.pid));
+        child.unref();
+        await fd.close();
+      } catch { return { status: 'failed', error: 'SPAWN_FAILED' }; }
+      const hit = await waitAny(['"event":"sms_sent"', '"event":"login_failed"'], startTimeoutMs);
+      if (hit === '"event":"sms_sent"') {
+        const ev = lastLine('"event":"sms_sent"');
+        return { status: 'otp_sent', expires_in: ev?.expires_in ?? null, note: 'check SMS; reply the digits here, the detached browser still waits on otp.code' };
+      }
+      if (hit === '"event":"login_failed"') {
+        const ev = lastLine('"event":"login_failed"');
+        kill();
+        return { status: 'failed', error: ev?.error ?? 'UNKNOWN', detail: ev?.detail ?? null };
+      }
+      kill();
+      return { status: 'failed', error: 'SMS_TRIGGER_UNVERIFIED' };
+    },
+    async submit(otp) {
+      if (!alive()) return { status: 'not_active', note: 'run bhx_login_start first' };
+      try { await writeFile(P('otp.code'), `${otp}\n`, { mode: 0o600 }); } catch { return { status: 'failed', error: 'CODE_WRITE_FAILED' }; }
+      const hit = await waitAny(['"event":"login_ok"', '"event":"login_failed"'], waitOutcomeMs);
+      if (hit === '"event":"login_ok"') { kill(); return { status: 'logged_in' }; }
+      if (hit === '"event":"login_failed"') {
+        const ev = lastLine('"event":"login_failed"');
+        kill();
+        return { status: 'failed', error: ev?.error ?? 'UNKNOWN', detail: ev?.detail ?? null };
+      }
+      kill();
+      return { status: 'failed', error: 'OUTCOME_UNVERIFIED' };
+    },
+    async close() { kill(); },
   };
-  return {close,active:()=>Boolean(current),async start(){
-    if(current)return current.ready;
-    if(!display)throw Error('LOGIN_DISPLAY_REQUIRED: configure a private graphical desktop. Never expose VNC or browser debugging publicly.');
-    let exited;
-    const state={exited:new Promise(r=>{exited=r;})};current=state;
-    state.ready=new Promise((resolve,reject)=>{
-      let settled=false,buffer='';
-      const timer=setTimeout(()=>{fail();state.child?.kill('SIGTERM');},65000);timer.unref();
-      const fail=()=>{clearTimeout(timer);if(!settled){settled=true;reject(Error('LOGIN_START_FAILED'));}};
-      try{
-        state.child=launch(process.execPath,[fileURLToPath(new URL('../scripts/login.mjs',import.meta.url))],{env:{...process.env,DISPLAY:display},stdio:['ignore','pipe','pipe']});
-        state.child.on('error',()=>{fail();if(!state.child.pid){exited();if(current===state)current=null;}});
-        state.child.once('exit',()=>{fail();exited();if(current===state)current=null;});
-        state.child.stderr.on('data',()=>{});
-        state.child.stdout.on('data',data=>{
-          if(settled)return;
-          buffer+=data.toString();if(buffer.length>4096){fail();state.child.kill('SIGTERM');return;}
-          if(buffer.split('\n').some(line=>{try{return JSON.parse(line).event==='login_browser_ready';}catch{return false;}})){
-            settled=true;clearTimeout(timer);
-            resolve({status:'interactive-login-ready',authenticated:false,instructions:'Use configured private desktop browser. Enter credentials, OTP or CAPTCHA directly on BHX, never in chat. Close browser, then call bhx_auth_status.'});
-          }
-        });
-      }catch{fail();exited();if(current===state)current=null;}
-    });
-    return state.ready;
-  }};
 }
