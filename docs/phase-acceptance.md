@@ -26,7 +26,7 @@ These results prove historical bounded behavior plus the two-product multi-item 
 - [x] Saved-address selection tool, verified context change, persistence and restoration. Cross-address cycle verified 2026-10-30: 90713515 (store 14524/ward 101462) → 110346409 (store 14509/ward 101469) → restored, cart empty throughout (`docs/address-acceptance.md`, `scripts/address-switch-test.py`). Per-store price localization still not compared.
 - [ ] Interactive login MCP tool and actionable authentication/session-expiry errors.
 - [x] General cart operations with precise baseline diff, unrelated-item preservation and verified persistence. Live two-product cycle verified 2026-10-30 (`docs/cart-acceptance.md`).
-- [ ] Failure-path regression coverage and independent current-snapshot review.
+- [x] Failure-path regression coverage and independent current-snapshot review. Offline suite `scripts/failure-paths.test.mjs` (in `npm test`) asserts every failure fails closed with an exact code and performs no write; live current snapshot re-taken 2026-10-30 17:13 +07 (auth valid, 1 selected address, cart empty) with 13 tools + annotations cross-checked against the docs. See `docs/failure-paths.md`.
 - [ ] Feasibility, README and operational docs match implemented and verified scope.
 
 Mobile-app synchronization remains unverified. The specification requests this check if possible; website persistence must still be proved independently.
