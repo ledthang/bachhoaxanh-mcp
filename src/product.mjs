@@ -39,8 +39,11 @@ export function projectProduct(payload,productId){
  if(!Array.isArray(b.productPrices)||!b.productPrices.length)fail();
  const prices=b.productPrices.map(p=>{
   if(p===null||typeof p!=='object')fail();
-  if(typeof p.price!=='number'||!Number.isFinite(p.price)||p.price<0||typeof p.sysPrice!=='number'||!Number.isFinite(p.sysPrice)||p.sysPrice<0||p.price>p.sysPrice)fail();
-  return {price_vnd:p.price,list_price_vnd:p.sysPrice,can_buy:typeof p.isCanBuy==='boolean'?p.isCanBuy:null};
+  if(typeof p.price!=='number'||!Number.isFinite(p.price)||p.price<0||typeof p.sysPrice!=='number'||!Number.isFinite(p.sysPrice)||p.sysPrice<0)fail();
+  // VND has no sub-unit. Upstream occasionally emits float noise (e.g. 23799.999999999985); snap to whole VND, then re-check ordering.
+  const price=Math.round(p.price), list=Math.round(p.sysPrice);
+  if(price>list)fail();
+  return {price_vnd:price,list_price_vnd:list,can_buy:typeof p.isCanBuy==='boolean'?p.isCanBuy:null};
  });
  return {product_id:productId,variant:b.type??null,scenario:b.scenario??null,prices,availability:prices.every(p=>p.can_buy===false)?'unavailable':'unknown',stock_quantity:null,maximum_quantity:null,price_status:'observed-detail-not-guaranteed-payable'};
 }

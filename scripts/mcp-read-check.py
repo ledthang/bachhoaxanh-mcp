@@ -1,4 +1,4 @@
-# Clean stdio MCP check: initialize, tools/list, auth status, cart read. Waits for real responses.
+# Clean stdio MCP check: initialize, tools/list, auth, addresses, delivery, cart read. Waits for real responses.
 import json
 import subprocess
 import time
@@ -38,7 +38,7 @@ names = [t['name'] for t in (tools or {}).get('result', {}).get('tools', [])]
 print('tools:', len(names))
 print('checkout_or_payment_present:', any('checkout' in n or 'payment' in n for n in names))
 
-for msg_id, name in ((3, 'bhx_auth_status'), (4, 'bhx_get_cart')):
+for msg_id, name in ((3, 'bhx_auth_status'), (4, 'bhx_list_addresses'), (5, 'bhx_get_delivery_context'), (6, 'bhx_get_cart')):
     start = time.time()
     send({'jsonrpc': '2.0', 'id': msg_id, 'method': 'tools/call', 'params': {'name': name, 'arguments': {}}})
     reply = recv_until(msg_id, start + 180)
@@ -53,12 +53,16 @@ for msg_id, name in ((3, 'bhx_auth_status'), (4, 'bhx_get_cart')):
         continue
     if name == 'bhx_auth_status':
         print('auth_status:', {k: data.get(k) for k in ('authenticated', 'session_status', 'requires_login')})
+    elif name == 'bhx_list_addresses':
+        addrs = data.get('addresses', [])
+        print('addresses: %d selected=%s' % (len(addrs), sum(1 for a in addrs if a.get('selected'))))
+    elif name == 'bhx_get_delivery_context':
+        print('delivery: verified=%s store=%s province=%s ward=%s' % (
+            data.get('verified'), data.get('store_id'), data.get('province_id'), data.get('ward_id')))
     else:
-        print('cart: items=%d total=%s verified=%s context_store=%s' % (
-            len(data.get('items', [])), data.get('total'),
-            (data.get('context') or {}).get('verified'),
-            (data.get('context') or {}).get('store_id')))
-        for item in data.get('items', []):
+        items = data.get('items', data.get('cart', {}).get('items', []))
+        print('cart: items=%d total=%s' % (len(items), data.get('total')))
+        for item in items:
             print('  line: qty=%s unit=%s total=%s inactive=%s' % (item.get('quantity'), item.get('unit_price'), item.get('total'), item.get('inactive')))
 
 proc.stdin.close()
