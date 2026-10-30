@@ -196,6 +196,23 @@ for (const [label, mutation] of [
   }
   await h.close();
 }
+// dead-session read (readSnapshot throws REQUIRES_LOGIN) must be ACTIONABLE, not the
+// blind BHX_READ_UNVERIFIED. This is the login/session-expiry gate: the human reading
+// it must know to open bhx_login_start, not think the server is broken.
+{
+  const h = createHandler({ snapshotReader: async () => { throw Error('REQUIRES_LOGIN'); } });
+  await h.handle({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+  for (const name of ['bhx_auth_status', 'bhx_get_cart', 'bhx_list_addresses', 'bhx_search_products']) {
+    const args = name === 'bhx_search_products' ? { query: 'cai ngot' } : {};
+    const r = await h.handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } });
+    assert.equal(r.isError, true, `${name}: must be an error result`);
+    assert.match(r.content[0].text, /^REQUIRES_LOGIN:/, `${name}: actionable login code`);
+    assert.doesNotMatch(r.content[0].text, /BHX_READ_UNVERIFIED/, `${name}: must not be the blind code`);
+    assert.match(r.content[0].text, /bhx_login_start/, `${name}: names the recovery tool`);
+  }
+  // a REQUIRES_LOGIN read performs no write and opens no mutation session
+  await h.close();
+}
 // search query validation: control chars / blank / oversized -> -32602 before any browser
 {
   const h = createHandler({ snapshotReader: async () => { throw new Error('must not open browser'); } });

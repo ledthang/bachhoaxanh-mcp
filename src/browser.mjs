@@ -76,7 +76,17 @@ export async function readSnapshot(query='cải ngọt', requireProducts=false, 
     await browser.setOffline(false);
     const cartDeadline=Date.now()+30000;
     while(!fatal&&!cart&&Date.now()<cartDeadline){await page.goto(SITE+'/gio-hang',{waitUntil:'domcontentloaded',timeout:30000});while(!fatal&&!cart&&Date.now()<cartDeadline)await page.waitForTimeout(300);}
-    if(fatal||!cart)fail();
+    if(fatal||!cart) fail();
+    // Active identity gate: the SPA never fetches full-profile when anonymous,
+    // so a passive wait would time out blind. One authorized profile fetch
+    // (GET /gw/bhx-api-identity/.../full-profile, credentials included) is the
+    // deterministic authority: 401/403 => not logged in (REQUIRES_LOGIN, actionable),
+    // 200 code 0 with addressReceiver => session valid, populate profile.
+    if(!profile&&!fatal){
+      const probe=await page.evaluate(async p=>{try{const r=await fetch(p,{credentials:'include'});const j=await r.json().catch(()=>null);return{status:r.status,ok:r.ok,body:j};}catch{return{status:0,ok:false,body:null};}},PROFILE);
+      if(probe.status===401||probe.status===403) throw Error('REQUIRES_LOGIN');
+      if(probe.ok&&probe.body&&probe.body.code===0&&Array.isArray(probe.body.data&&probe.body.data.addressReceiver)) profile=probe.body;
+    }
     await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
     if(productId!==null){
       const searchDeadline=Date.now()+20000;

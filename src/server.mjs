@@ -60,7 +60,7 @@ async function handle(m){
   if(name==='bhx_get_cart'||name==='bhx_cart_summary')baselineRead={cart:s.cart,context:s.context};
   const data=name==='bhx_auth_status'?{authenticated:s.authenticated,session_status:s.session_status,requires_login:s.requires_login}:name==='bhx_list_addresses'?{addresses:s.addresses}:name==='bhx_get_delivery_context'?s.context:name==='bhx_search_products'?{products:s.products.map(catalogContract),context:s.context,pagination:'unverified-first-response-only',price_status:'catalog-observed-not-guaranteed-payable'}:{...s.cart,context:s.context};
   return {content:[{type:'text',text:JSON.stringify({...data,observed_at:s.observed_at})}]};
- }catch{return {isError:true,content:[{type:'text',text:'BHX_READ_UNVERIFIED: session, selected address or response could not be verified. No cart mutation performed.'}]};}
+ }catch(error){const code=error&&error.message==='REQUIRES_LOGIN'?'REQUIRES_LOGIN: BHX session is not active. Open login with bhx_login_start on the private desktop, enter credentials/OTP there (never in chat), then verify with bhx_auth_status. No cart operation performed.':'BHX_READ_UNVERIFIED: session, selected address or response could not be verified. No cart mutation performed.';return {isError:true,content:[{type:'text',text:code}]};}
 }
 return {handle,close:async()=>{await login.close();await session?.close();}};
 }
