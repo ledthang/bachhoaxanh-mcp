@@ -2,18 +2,19 @@
 
 ## KI-1 — Address-switch verification blocked (account has one saved address)
 
-**Status:** accepted, temporarily ignored (owner decision 2026-10-30).
+**Status:** closed 2026-10-30 (a second saved address appeared; cross-address verified).
 
-The account has exactly one saved address (`selected=true`, `address_id=90713515`,
-store `14524` / province `1020` / ward `101462`). The acceptance criterion
-"change address ⇒ delivery context changes" therefore cannot be exercised: there is
-no second address to switch to.
+The account previously had exactly one saved address (`selected=true`, `address_id=90713515`,
+store `14524` / province `1020` / ward `101462`), so the acceptance criterion
+"change address ⇒ delivery context changes" could not be exercised.
 
-**Impact:** `bhx_select_address` is implemented and returns the selected address, but
-cross-context behaviour (different store, different localized price set) is unverified.
+A second address (`110346409`, 205 Trần Phú, ward `101469`, createdDate 2026-10-30 16:10:41)
+is now present. Real switch cycle verified: select 110346409 → store `14524→14509`, ward
+`101462→101469` (`changed=true`, `verified=true`) → select 90713515 → context restored,
+cart empty throughout. See `docs/address-acceptance.md` and `scripts/address-switch-test.py`.
 
-**Upgrade path:** add a second saved address in the BHX account, then run
-`bhx_select_address` for it and confirm store/price context changes.
+**Residual:** per-store price localization not compared in this run (context change is
+proven; repricing is not claimed).
 
 ## KI-2 — Web cart and mobile cart do not sync
 

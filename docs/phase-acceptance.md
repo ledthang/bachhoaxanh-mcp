@@ -23,7 +23,7 @@ These results prove historical bounded behavior plus the two-product multi-item 
 - [ ] Normalized package, price, promotion, variant and availability information; unknown values preserved.
 - [x] Ten distinct representative products compared against authenticated website, timestamped sanitized evidence. 12 products compared (see `docs/catalog-acceptance.md`); all verdicts remain **partial** because stock/promotion eligibility is unknown and 3 rows show API-vs-website price mismatch.
 - [ ] Observed availability semantics documented; search appearance and numeric quantity fields never treated as inventory proof.
-- [ ] Saved-address selection tool, verified context change, persistence and restoration. Same single-address POST + restart verified; cross-address test blocked: user confirmed no second saved address and requested keeping one.
+- [x] Saved-address selection tool, verified context change, persistence and restoration. Cross-address cycle verified 2026-10-30: 90713515 (store 14524/ward 101462) → 110346409 (store 14509/ward 101469) → restored, cart empty throughout (`docs/address-acceptance.md`, `scripts/address-switch-test.py`). Per-store price localization still not compared.
 - [ ] Interactive login MCP tool and actionable authentication/session-expiry errors.
 - [x] General cart operations with precise baseline diff, unrelated-item preservation and verified persistence. Live two-product cycle verified 2026-10-30 (`docs/cart-acceptance.md`).
 - [ ] Failure-path regression coverage and independent current-snapshot review.

@@ -26,12 +26,23 @@ async function applySelection(before,id) {
     await page.goto('https://www.bachhoaxanh.com/gio-hang',{waitUntil:'domcontentloaded'});
     await page.waitForFunction(()=>Boolean(document.querySelector('#btn_choose_location')));
     for(let i=0;i<100&&(!profile||!cart||!delivery);i++)await page.waitForTimeout(100);
-    // ponytail: only observed single-address contract; enable cross-address changes after live reconciliation evidence.
-    if(profile?.data?.addressReceiver?.length!==1||String(profile.data.addressReceiver[0].addressId)!==id||cart?.TotalItemShow!==0||!cart?.CartId)throw Error('BHX_ADDRESS_SELECTION_CONTRACT_UNVERIFIED');
-    if(!['provinceId','wardId','storeId'].every((key,i)=>String(delivery[key])===String(before.context[['province_id','ward_id','store_id'][i]])))throw Error('BHX_DELIVERY_CONTEXT_CHANGED');
+    // Cross-address contract: target must be a saved entry, picked via its radio in the
+    // saved-address list; store is resolved server-side from the ward (observed 101469 -> 14509).
+    const saved = profile?.data?.addressReceiver?.find(a => String(a.addressId) === id);
+    if (!saved || cart?.TotalItemShow !== 0 || !cart?.CartId) throw Error('BHX_ADDRESS_SELECTION_CONTRACT_UNVERIFIED');
+    if (!['provinceId', 'wardId', 'storeId'].every((key, i) => String(delivery[key]) === String(before.context[['province_id', 'ward_id', 'store_id'][i]]))) throw Error('BHX_DELIVERY_CONTEXT_CHANGED');
     await page.locator('#btn_choose_location').click();
-    const choices=page.locator('.lstProfile > div');if(await choices.count()!==1)throw Error('BHX_ADDRESS_SELECTION_CONTRACT_UNVERIFIED');
-    await choices.click();armed=true;
+    const entries = page.locator('.lstProfile > div');
+    const entryCount = await entries.count();
+    if (entryCount < 1) throw Error('BHX_ADDRESS_SELECTION_CONTRACT_UNVERIFIED');
+    const choice = entries.filter({ hasText: saved.address });
+    if (await choice.count() !== 1) throw Error('BHX_ADDRESS_AMBIGUOUS_ENTRY');
+    // Radio is custom-styled (input is visually hidden); the entry card is the click target.
+    await choice.first().click();
+    const radio = choice.locator('input[type=radio]').first();
+    for (let i = 0; i < 20 && (await radio.isChecked() !== true); i++) await page.waitForTimeout(200);
+    if (await radio.isChecked() !== true) throw Error('BHX_ADDRESS_SELECTION_UNVERIFIED');
+    armed = true;
     const ack=page.waitForResponse(r=>r.url()===prefix+'SelectProfile'&&r.request().method()==='POST',{timeout:15000});
     await page.locator('button:visible').filter({hasText:/^XÁC NHẬN$/i}).click();
     const response=await ack,body=await response.json();
@@ -48,11 +59,17 @@ export function validateAddressInput(input) {
   return input.address_id;
 }
 
-export function selectionAllowed(url,method,body,baseline) {
+export function selectionAllowed(url,method,body,baseline){
   const exact=(v,keys)=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k));
   if(url!=='https://api.bachhoaxanh.com/gw/cart/api/OrderV2/SelectProfile'||method!=='POST'||!baseline?.address)return false;
-  if(!exact(body,['data','districtId','provinceId','storeId','wardId','isNewModel'])||body.isNewModel!==true||body.districtId!==Number(baseline.address.districtId)||!['provinceId','storeId','wardId'].every(k=>body[k]===baseline[k]))return false;
+  if(!exact(body,['data','districtId','provinceId','storeId','wardId','isNewModel'])||body.isNewModel!==true)return false;
   const d=body.data,a=baseline.address;
+  // Cross-address: address fields must match the TARGET saved address; storeId is resolved
+  // server-side from the ward (observed 101469 -> 14509), so it must be a positive store,
+  // not necessarily the caller's current store.
+  const posInt=(v)=>Number.isSafeInteger(Number(v))&&Number(v)>0;
+  if(body.districtId!==Number(a.districtId)||body.provinceId!==Number(a.provinceId)||body.wardId!==Number(a.wardId))return false;
+  if(!posInt(body.storeId))return false;
   return Boolean(exact(d,['CartId','Lat','Lng','ProfileDetailId','ProfileDetailIds','wardId'])&&d.CartId===baseline.cartId&&d.ProfileDetailId===Number(a.addressId)&&d.Lat===Number(a.lat)&&d.Lng===Number(a.lng)&&Number.isFinite(d.Lat)&&Number.isFinite(d.Lng)&&d.wardId===Number(a.wardId)&&Array.isArray(d.ProfileDetailIds)&&d.ProfileDetailIds.length===0);
 }
 
@@ -79,17 +96,16 @@ export async function selectAddress(input, snapshotReader = readSnapshot, apply 
   try { before = await snapshotReader(); }
   catch { fail('BHX_AUTH_CONTEXT_REQUIRED'); }
   const context = selected(before, id);
-  if (context.address_id !== id) fail('BHX_ADDRESS_SELECTION_CONTRACT_UNVERIFIED');
+  const wasSelected = context.address_id === id;
   if (!Array.isArray(before.cart?.items) || before.cart.items.length) fail('BHX_ADDRESS_NONEMPTY_CART');
   await apply(before,id);
   try { after = await snapshotReader(); }
   catch { fail('BHX_ADDRESS_RESTART_UNVERIFIED'); }
   if (!Array.isArray(after.cart?.items) || after.cart.items.length) fail('BHX_ADDRESS_CART_CHANGED');
   const fresh = selected(after, id);
-  if (['address_id', 'province_id', 'ward_id', 'store_id'].some(key => fresh[key] !== context[key]))
-    fail('BHX_DELIVERY_CONTEXT_CHANGED');
+  if (fresh.address_id !== id) fail('BHX_DELIVERY_CONTEXT_CHANGED');
   return {
-    selected: true, changed: false, restart_verified: true,
+    selected: true, changed: !wasSelected, restart_verified: true,
     selection_status: 'selected-and-restarted',
 
     context: { address_id: '[masked]', province_id: '[masked]', ward_id: '[masked]',
