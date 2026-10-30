@@ -2,7 +2,7 @@
 
 Status: INCOMPLETE. Gates A and B NOT PASSED. No production MCP or cart adapter implemented.
 
-Update after user login: authenticated profile succeeds after browser/process restart; the account has one saved address (re-checked 2026-10-30 via `bhx_list_addresses`; the earlier "2 saved addresses observed" note was a miscount); selected delivery state persists; website cart read succeeds with 0 items and observed context storeId [selected-store]. See [authenticated observations](authenticated-observations.md). Earlier pending-login statements below describe initial baseline, not latest state.
+Update after user login: authenticated profile succeeds after browser/process restart; the account has **two** saved addresses (re-checked 2026-10-30 via `bhx_list_addresses`; the earlier "one saved address" note is obsolete — a second entry, `110346409` / 205 Trần Phú / ward 101469, now exists and cross-address switching was verified with it); selected delivery state persists; website cart read succeeds with 0 items and observed context storeId [selected-store]. See [authenticated observations](authenticated-observations.md) and [address acceptance](address-acceptance.md). Earlier pending-login statements below describe initial baseline, not latest state.
 
 ## Environment observed
 

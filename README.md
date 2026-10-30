@@ -13,7 +13,8 @@ Working and integrated, **not production-ready**. Do not treat any section below
 | Saved addresses, delivery context, cart read/summary | verified |
 | Product search + generic product detail | verified (partial: stock/promotion semantics unknown) |
 | Two-product live cart cycle with unrelated-item preservation | verified |
-| Cross-address switching, inventory guarantees, mobile-app sync | **not verified / blocked** |
+| Cross-address switching (context change + persistence + restore) | verified 2026-10-30 |
+| Per-store price localization, inventory guarantees, mobile-app sync | **not verified** |
 
 No checkout or payment tool exists, and the request allowlist refuses those routes.
 
