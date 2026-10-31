@@ -157,6 +157,7 @@ export function createSession({ chromiumPath } = {}) {
       throw new Error('DELIVERY_CONTEXT_UNVERIFIED');
     }
     return {
+      address_id: Number(envelope.profileDetailId ?? envelope.addressId ?? 0) || null,
       province_id: Number(envelope.provinceId),
       district_id: Number(envelope.districtId),
       ward_id: Number(envelope.wardId),
@@ -222,6 +223,59 @@ export function createSession({ chromiumPath } = {}) {
       price_vnd: options.length ? options[0].price_vnd : null,
       has_promotion: options.some((o) => o.window),
       promotion_windows: options.filter((o) => o.window).map((o) => o.window),
+    };
+  }
+
+  // Address switch: drives the real picker on the parked page. The SPA posts
+  // OrderV2/SelectProfile with the chosen address's ward/store; we click the entry card
+  // (radio is visually hidden), verify the radio checked, click XÁC NHẬN, wait for the
+  // SelectProfile ack, then re-read to confirm the target is now the selected context.
+  // Fail closed on every unverified step. Never invents a switch.
+  async function selectAddress({ address_id }) {
+    const id = String(address_id);
+    const list = await addresses(); // propagates REQUIRES_LOGIN / ADDRESS_ENDPOINT_UNAVAILABLE
+    const target = list.find((a) => a.id === id);
+    if (!target) throw new Error('ADDRESS_NOT_SAVED');
+    const wasSelected = !!target.selected;
+
+    let ack = null;
+    const seenAck = page.waitForResponse(
+      (r) => r.url() === API + '/gw/cart/api/OrderV2/SelectProfile' && r.request().method() === 'POST',
+      { timeout: 20000 },
+    ).then(async (r) => { let j = null; try { j = await r.json(); } catch {} return { ok: r.ok(), j }; }).catch(() => null);
+
+    const btn = page.locator('#btn_choose_location');
+    if (await btn.count() !== 1) throw new Error('ADDRESS_PICKER_UNAVAILABLE');
+    await btn.click();
+    const entries = page.locator('.lstProfile > div');
+    for (let i = 0; i < 40 && (await entries.count()) < 1; i++) await sleep(250);
+    if ((await entries.count()) < 1) throw new Error('ADDRESS_PICKER_EMPTY');
+    const choice = entries.filter({ hasText: target.label });
+    const n = await choice.count();
+    if (n !== 1) throw new Error(n === 0 ? 'ADDRESS_ENTRY_NOT_FOUND' : 'ADDRESS_AMBIGUOUS_ENTRY');
+    await choice.first().click();
+    const radio = choice.first().locator('input[type=radio]').first();
+    for (let i = 0; i < 20 && (await radio.isChecked().catch(() => false)) !== true; i++) await sleep(200);
+    if ((await radio.isChecked().catch(() => false)) !== true) throw new Error('ADDRESS_SELECTION_UNVERIFIED');
+
+    const confirm = page.locator('button:visible').filter({ hasText: /^XÁC NHẬN$/i });
+    if (await confirm.count() !== 1) throw new Error('ADDRESS_CONFIRM_MISSING');
+    await confirm.first().click();
+    ack = await seenAck;
+    if (!ack || !ack.ok || ack.j?.ResultCode !== 0 || ack.j?.HttpCode !== 200) throw new Error('ADDRESS_SELECTION_FAILED');
+
+    // Re-read: target must now be the single selected entry, and its context must be live.
+    const after = await addresses();
+    const nowSelected = after.filter((a) => a.selected);
+    if (nowSelected.length !== 1 || nowSelected[0].id !== id) throw new Error('ADDRESS_SWITCH_UNVERIFIED');
+    await page.reload({ waitUntil: 'networkidle', timeout: 60000 });
+    envelope = null; // context changed at the SPA; force a fresh envelope capture
+    const ctx = await deliveryContext();
+    return {
+      selected: true, changed: !wasSelected, verified: true,
+      selection_status: 'selected-and-verified',
+      context: ctx,
+      observed_at: new Date().toISOString(),
     };
   }
 
@@ -305,5 +359,5 @@ export function createSession({ chromiumPath } = {}) {
     if (ctx) { await ctx.close().catch(() => {}); ctx = null; page = null; envelope = null; }
   }
 
-  return { park, cartState, lines, addresses, deliveryContext, search, checkoutPreview, add, update, remove, close };
+  return { park, cartState, lines, addresses, deliveryContext, selectAddress, search, checkoutPreview, add, update, remove, close };
 }

@@ -165,17 +165,8 @@ export function createHandler({ sessionFactory = createSession, loginFactory } =
         return text({ removed: true, line_id: args.line_id, observed_at: new Date().toISOString() });
       }
       case 'bhx_select_address': {
-        const before = await s.deliveryContext();
-        // address selection requires the SPA picker; this build keeps selection as an explicit,
-        // out-of-band operation on the site. Return a status describing what is required, not a
-        // fake applied-change.
-        return text({
-          requested_address_id: args.address_id,
-          current_context: before,
-          applied: false,
-          note: 'address selection must occur in the BHX UI (SelectProfile is not exposed to this MCP). Call again after selecting to verify the new context.',
-          observed_at: new Date().toISOString(),
-        });
+        const r = await s.selectAddress({ address_id: args.address_id });
+        return text(r);
       }
       case 'bhx_login_start': {
         if (loginActive) return err('LOGIN_IN_PROGRESS', 'window already open');

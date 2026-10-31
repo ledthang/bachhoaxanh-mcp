@@ -43,6 +43,7 @@ function fakeSession() {
       return { removed: true };
     },
     async addresses() { return [{ id: '90713515', label: 'Nhà riêng', selected: true }]; },
+    async selectAddress({ address_id }) { return { selected: true, changed: false, verified: true, selection_status: 'selected-and-verified', context: { address_id: Number(address_id), province_id: 6, district_id: 1452, ward_id: 101462, store_id: 14524, verified: true, source: 'live-cart-envelope' } }; },
     async deliveryContext() { return { province_id: 6, district_id: 1452, ward_id: 101462, store_id: 14524, verified: true, cart_total_vnd: raw.reduce((a, l) => a + (l.Total || 0), 0), source: 'live-cart-envelope' }; },
     async search(o) {
       const norm = (it) => {
@@ -111,9 +112,9 @@ assert.equal(JSON.parse(empty.content[0].text).items.length, 0);
 const missUpd = await handle({ jsonrpc: '2.0', id: 91, method: 'tools/call', params: { name: 'bhx_update_cart_item', arguments: { line_id: 'NOPE', quantity: 1, user_authorized: true } } });
 assert.ok(missUpd.content[0].text.startsWith('LINE_NOT_FOUND'));
 
-// ---- address: select verifies current context, never fakes apply ----
+// ---- address: select drives the picker, returns verified switch (or fail-closed) ----
 const sel = await handle({ jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'bhx_select_address', arguments: { address_id: '90713515', user_authorized: true } } });
-assert.equal(JSON.parse(sel.content[0].text).applied, false);
+assert.equal(JSON.parse(sel.content[0].text).selected, true);
 
 // ---- login relay gating ----
 const fakeLogin = { async start() { return { status: 'otp_sent', expires_in: 120 }; }, async submit(otp) { return { status: 'logged_in', otp }; }, async close() {} };
