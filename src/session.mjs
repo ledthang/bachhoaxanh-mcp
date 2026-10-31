@@ -169,19 +169,22 @@ export function createSession({ chromiumPath } = {}) {
   }
 
   // Search: DataSearch from the parked cart page (same origin, session cookie).
+  // DataSearch REQUIRES provinceId + storeId in the body: without them it returns
+  // total:0 even for keywords with 166 live matches (verified live 2026-10-31).
+  // Reuse the SPA's own parked envelope values — never invent a store/province.
   async function search({ query, pageIndex = 0, pageSize = 10 }) {
-    await park();
-    const r = await page.evaluate(async ({ api, q, pi, ps }) => {
+    const env = await captureEnvelope();
+    const r = await page.evaluate(async ({ api, q, pi, ps, provinceId, storeId }) => {
       const res = await fetch(api + '/gw/search/v2/DataSearch', {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ keywords: q, pageIndex: pi, pageSize: ps }),
+        body: JSON.stringify({ keywords: q, pageIndex: pi, pageSize: ps, provinceId, storeId, sortStr: '' }),
       });
       let j = null;
       try { j = await res.json(); } catch { /* non-json */ }
       return { status: res.status, j };
-    }, { api: API, q: query, pi: pageIndex, ps: pageSize });
+    }, { api: API, q: query, pi: pageIndex, ps: pageSize, provinceId: Number(env.provinceId), storeId: Number(env.storeId) });
     const block = r.j?.data || {};
     const items = Array.isArray(block.products) ? block.products : [];
     return {
