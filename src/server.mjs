@@ -170,7 +170,7 @@ export function createHandler({ sessionFactory = createSession, loginFactory } =
       }
       case 'bhx_login_start': {
         if (loginActive) return err('LOGIN_IN_PROGRESS', 'window already open');
-        login = (loginFactory || createLoginDefault)();
+        login = await (loginFactory ? loginFactory() : createLoginDefault());
         const r = await login.start();
         if (r.status === 'otp_sent') { loginActive = true; return text(r); }
         login = null;
